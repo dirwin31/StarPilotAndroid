@@ -1,0 +1,21 @@
+[Unit]
+Description=Galaxy sentry push relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+WorkingDirectory=/opt/galaxy-push-relay
+Environment=FCM_PROJECT_ID=replace-with-firebase-project-id
+Environment=IOS_APP_IDS=link.galaxy.bluetooth.natehuby76
+LoadCredential=service-account.json:/etc/galaxy-push-relay/service-account.json
+Environment=FCM_SERVICE_ACCOUNT_FILE=%d/service-account.json
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

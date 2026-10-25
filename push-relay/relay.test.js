@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { handle, valid, fcmMessage } from './worker.js'
+import { handle, valid, fcmMessage, iosApps } from './relay.js'
 const body = { token: 'private-token', appId: 'link.firestar.galaxy', kind: 'warning', eventId: 'abc', wallTimeNs: 1000000000, label: 'Phone' }
 function request(value = body) { return new Request('https://relay.test/v1/sentry', { method: 'POST', body: JSON.stringify(value) }) }
 function environment() {
@@ -27,4 +27,22 @@ test('rate limiting and response mapping', async () => {
 })
 test('invalid body never sends', async () => {
   assert.equal((await handle(request({ ...body, token: '' }), environment(), () => { throw Error('must not send') })).status, 400)
+})
+test('iOS app IDs get a visible APNs alert and Android stays data-only', () => {
+  const ios = iosApps({ IOS_APP_IDS: 'link.galaxy.app' })
+  const phone = { ...body, appId: 'link.galaxy.app' }
+  assert.equal(valid(phone), false)
+  assert.ok(valid(phone, ios))
+  const message = fcmMessage(phone, true).message
+  assert.equal(message.notification.title, 'Sentry motion')
+  assert.equal(message.apns.headers['apns-push-type'], 'alert')
+  assert.equal(message.apns.headers['apns-priority'], '10')
+  assert.equal(message.android, undefined)
+  assert.equal(message.data.type, 'sentry')
+  assert.equal(fcmMessage(body).message.apns, undefined)
+  assert.equal(fcmMessage(body).message.notification, undefined)
+})
+test('iOS IDs are configurable and can be disabled', () => {
+  assert.equal(iosApps({ IOS_APP_IDS: '' }).size, 0)
+  assert.deepEqual([...iosApps({ IOS_APP_IDS: 'a.b, c.d' })], ['a.b', 'c.d'])
 })

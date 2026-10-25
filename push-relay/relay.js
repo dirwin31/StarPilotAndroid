@@ -1,14 +1,16 @@
-const apps = new Set(['link.firestar.companion', 'link.firestar.galaxy'])
+const androidApps = new Set(['link.firestar.companion', 'link.firestar.galaxy'])
+const defaultIosApps = 'link.galaxy.bluetooth.natehuby76'
+export const iosApps = env => new Set(String(env?.IOS_APP_IDS ?? defaultIosApps).split(',').map(id => id.trim()).filter(Boolean))
 const kinds = new Set(['warning', 'alarm', 'test'])
 const encode = value => new TextEncoder().encode(value)
 const b64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 const json = (status, value) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } })
 let oauth = null
 
-export function valid(body) {
+export function valid(body, ios = new Set()) {
   return body !== null && typeof body === 'object' && !Array.isArray(body) &&
     Object.keys(body).sort().join(',') === 'appId,eventId,kind,label,token,wallTimeNs' &&
-    typeof body.token === 'string' && /^[^\s\x00-\x1f\x7f]{1,4096}$/.test(body.token) && apps.has(body.appId) && kinds.has(body.kind) &&
+    typeof body.token === 'string' && /^[^\s\x00-\x1f\x7f]{1,4096}$/.test(body.token) && (androidApps.has(body.appId) || ios.has(body.appId)) && kinds.has(body.kind) &&
     typeof body.eventId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(body.eventId) &&
     typeof body.wallTimeNs === 'number' && Number.isInteger(body.wallTimeNs) && body.wallTimeNs > 0 && body.wallTimeNs < 2 ** 63 &&
     typeof body.label === 'string' && body.label.length <= 64 && !/[\x00-\x1f\x7f]/.test(body.label)
@@ -33,9 +35,15 @@ async function accessToken(env, fetcher) {
   return oauth.token
 }
 
-export function fcmMessage(body) {
-  return { message: { token: body.token, android: { priority: 'HIGH', ttl: '600s', restricted_package_name: body.appId },
-    data: { type: 'sentry', kind: body.kind, eventId: body.eventId, wallTimeNs: String(body.wallTimeNs), label: body.label } } }
+const titles = { alarm: 'Sentry alarm', warning: 'Sentry motion', test: 'Galaxy test alert' }
+
+export function fcmMessage(body, ios = false) {
+  const data = { type: 'sentry', kind: body.kind, eventId: body.eventId, wallTimeNs: String(body.wallTimeNs), label: body.label }
+  if (!ios) return { message: { token: body.token, android: { priority: 'HIGH', ttl: '600s', restricted_package_name: body.appId }, data } }
+  return { message: { token: body.token, data,
+    notification: { title: titles[body.kind], body: body.label || 'Parked motion detected' },
+    apns: { headers: { 'apns-priority': '10', 'apns-push-type': 'alert', 'apns-expiration': String(Math.floor(Date.now() / 1000) + 600), 'apns-collapse-id': body.eventId },
+      payload: { aps: { sound: 'default', 'thread-id': 'sentry', 'mutable-content': 1 } } } } }
 }
 
 export async function handle(request, env, fetcher = fetch, authorize = accessToken) {
@@ -55,7 +63,7 @@ export async function handle(request, env, fetcher = fetch, authorize = accessTo
     const bytes = new Uint8Array(length); let offset = 0
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length }
     body = JSON.parse(new TextDecoder().decode(bytes))
-    if (!valid(body)) return json(400, { error: 'Bad body' })
+    if (!valid(body, iosApps(env))) return json(400, { error: 'Bad body' })
   } catch { return json(400, { error: 'Bad body' }) }
   try {
     const hash = b64(await crypto.subtle.digest('SHA-256', encode(body.token)))
@@ -68,7 +76,7 @@ export async function handle(request, env, fetcher = fetch, authorize = accessTo
     const token = await authorize(env, fetcher)
     const response = await fetcher(`https://fcm.googleapis.com/v1/projects/${env.FCM_PROJECT_ID}/messages:send`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(fcmMessage(body)), signal: AbortSignal.timeout(5000), redirect: 'error',
+      body: JSON.stringify(fcmMessage(body, iosApps(env).has(body.appId))), signal: AbortSignal.timeout(5000), redirect: 'error',
     })
     if (response.ok) return json(200, { ok: true })
     const failure = await response.json().catch(() => ({}))
@@ -78,4 +86,3 @@ export async function handle(request, env, fetcher = fetch, authorize = accessTo
   } catch { return json(502, { error: 'Relay unavailable' }) }
 }
 
-export default { fetch(request, env) { return handle(request, env) } }

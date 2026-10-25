@@ -1,4 +1,4 @@
-# Maintainer setup
+# Push relay setup
 
 The app works without Firebase or a relay: enabled alerts use polling while connected and a 15-minute Android job. Android schedules background work opportunistically, so this does not promise immediate delivery.
 
@@ -8,16 +8,30 @@ The app works without Firebase or a relay: enabled alerts use polling while conn
 2. Register both Android IDs: `link.firestar.companion` and `link.firestar.galaxy`.
 3. Download the project's `google-services.json` with both clients and put it in `app/`. This config is not a secret; commit it. Both flavors automatically include Messaging when the file exists. Without it they compile the polling implementation.
 4. Enable Firebase Cloud Messaging API (V1) in Google Cloud.
-5. Create a service account named `galaxy-push-relay` with **Firebase Cloud Messaging API Admin**. Create a JSON key. Keep that key private: never commit it or send it to another maintainer.
+5. Create a service account named `galaxy-push-relay` with **Firebase Cloud Messaging API Admin**. Create a JSON key. Keep that key private: never commit it or share it.
 
-## Cloudflare
+## iOS push (optional)
 
-1. Install Wrangler with `npm i -g wrangler`, then `wrangler login` using your account.
-2. In `push-relay`, run `wrangler kv namespace create RATE`. Replace the namespace ID in `wrangler.toml`.
-3. Set `FCM_PROJECT_ID` in `[vars]` to your Firebase project ID.
-4. Run `wrangler secret put FCM_SERVICE_ACCOUNT` and paste the private service-account JSON at its prompt.
-5. Run `wrangler deploy`. Save the resulting `https://galaxy-push-relay.<account>.workers.dev` origin. A custom `push.firestar.link` route is optional.
-6. Give that origin to the StarPilot maintainer to set `APP_PUSH_RELAY_URL` in the normal StarPilot source. Sync the app using `companion/sync.sh`. The normal StarPilot branch update ships everything to comma; no SSH, environment variables, Params or hand-placed device files are needed.
+Firebase delivers to iPhones through Apple's push service, using the same relay.
+
+1. Join the Apple Developer Program. In Certificates, Identifiers & Profiles, enable the Push Notifications capability on the iOS app's identifier and create an APNs Auth Key (.p8). Note its Key ID and your Team ID.
+2. In Firebase, Project settings, Cloud Messaging, upload that key under the iOS app configuration. Register the iOS bundle ID as an iOS app in the project.
+3. Set the relay's `IOS_APP_IDS` (comma-separated bundle IDs) in `galaxy-push-relay.service`. The default is the bundle ID currently in the iOS project, `link.galaxy.bluetooth.natehuby76`; change it to the published one. An empty value turns iOS off. The same IDs must be in `APP_IDS` in StarPilot's `sentry_mode/notifications.py`, or comma will reject the subscription.
+4. The relay sends iOS pushes as a visible alert (title, body, `thread-id` sentry), not a silent data message, because iOS delays or drops silent pushes. Android keeps the data-only message.
+5. The iOS app must add the Firebase Messaging SDK, ask for notification permission, and send its FCM token with the iOS bundle ID to Galaxy's `appSubscribe` action, like the Android app. That app work is separate and not done yet. The sentry photo needs an iOS notification service extension, since the `mutable-content` flag only allows one.
+
+Test on a physical iPhone; the simulator cannot receive remote pushes.
+
+## Relay on a VPS
+
+Any Linux server with Node 20+ and HTTPS works; the existing `galaxy.firestar.link` server is the natural home. The relay holds no data and has no dependencies.
+
+1. Copy the `push-relay` folder to `/opt/galaxy-push-relay` and create `/etc/galaxy-push-relay/service-account.json` (root-owned, mode 600) holding the private service-account JSON.
+2. Install `galaxy-push-relay.service` into `/etc/systemd/system/`, set `FCM_PROJECT_ID` in it to the Firebase project ID, then run `systemctl daemon-reload && systemctl enable --now galaxy-push-relay`. It listens on `127.0.0.1:8787` only. The unit runs as a throwaway user and reads the key through systemd credentials.
+3. Put HTTPS in front of it. `Caddyfile.example` exposes only `/v1/sentry` at `https://push.firestar.link`; Caddy gets the certificate itself. With nginx, proxy `/v1/sentry` to `127.0.0.1:8787` the same way. Never expose port 8787 directly.
+4. Set `APP_PUSH_RELAY_URL` in the StarPilot source to `https://push.firestar.link/v1/sentry`. Sync the app using `companion/sync.sh`. The normal StarPilot branch update ships everything to comma; no SSH, environment variables, Params or hand-placed device files are needed.
+
+Run it by hand to try it: `FCM_PROJECT_ID=... FCM_SERVICE_ACCOUNT_FILE=key.json node server.js`.
 
 ## Test
 
@@ -28,7 +42,7 @@ From a terminal, read the token without putting it in shell history, then send a
 ```sh
 read -r FCM_TEST_TOKEN
 export FCM_TEST_TOKEN
-python3 - <<'PY' | curl --fail-with-body -H 'Content-Type: application/json' --data-binary @- https://YOUR-RELAY/v1/sentry
+python3 - <<'PY' | curl --fail-with-body -H 'Content-Type: application/json' --data-binary @- https://push.firestar.link/v1/sentry
 import json, os, time, uuid
 print(json.dumps({'token': os.environ['FCM_TEST_TOKEN'], 'appId': 'link.firestar.galaxy', 'kind': 'test', 'eventId': uuid.uuid4().hex, 'wallTimeNs': time.time_ns(), 'label': 'Relay test'}))
 PY
@@ -41,10 +55,10 @@ In Galaxy → Sentry, enable this phone, use Test, and check the delivery result
 
 ## Operate
 
-- Rotate credentials by creating a new service-account key, running `wrangler secret put FCM_SERVICE_ACCOUNT` again, deploying, then deleting the old key.
-- Inspect failures with `wrangler tail`; do not add token/body logging.
-- Review current [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [KV limits](https://developers.cloudflare.com/kv/platform/limits/) before rollout. KV has separate read/write quotas; do not assume the Workers daily request allowance is the usable push quota.
-- Run `wrangler delete` to turn off the relay. Polling remains available.
+- Rotate credentials by creating a new service-account key, replacing `/etc/galaxy-push-relay/service-account.json`, running `systemctl restart galaxy-push-relay`, then deleting the old key.
+- Inspect failures with `journalctl -u galaxy-push-relay`. The relay never logs tokens or bodies; do not add that.
+- Rate limits live in memory, so a restart resets them. That is acceptable for an abuse deterrent.
+- Update by copying new files and restarting. Run `systemctl disable --now galaxy-push-relay` to turn it off. Polling remains available.
 
 ## Play release
 

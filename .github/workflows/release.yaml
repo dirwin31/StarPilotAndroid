@@ -36,7 +36,7 @@ jobs:
       - name: Test
         run: |
           ./gradlew --max-workers=1 testDirectDebugUnitTest testPlayDebugUnitTest
-          node --test push-relay/worker.test.js
+          node --test push-relay/relay.test.js push-relay/server.test.js
       - name: Restore signing keys
         env:
           DIRECT_KEY: ${{ secrets.COMPANION_KEYSTORE_BASE64 }}
