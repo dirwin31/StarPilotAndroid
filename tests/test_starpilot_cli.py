@@ -1,4 +1,5 @@
 import argparse
+import base64
 import contextlib
 import hashlib
 import importlib.util
@@ -44,12 +45,15 @@ class ReleaseRunner(cli.Runner):
         if "/contents/" in endpoint:
             if self.missing_split:
                 raise cli.CommandError("404 Not Found")
-            return {"sha": "marker"}
+            return {"content": base64.b64encode(git(self.app, "show", "direct-v1.2.0:app/build.gradle.kts").encode()).decode()}
         if "/releases/tags/" in endpoint:
             return {"tag_name": "direct-v1.2.0", "draft": False, "prerelease": False,
                     "assets": [{"name": "galaxy-direct.apk", "state": "uploaded",
                                 "digest": self.digest, "size": len(self.apk)}]}
         if "/compare/" in endpoint:
+            if "direct-v" in endpoint:
+                result = subprocess.run(["git", "-C", str(self.app), "merge-base", "--is-ancestor", "direct-v1.2.0", "Direct-Distro"])
+                return {"status": "ahead" if result.returncode == 0 else "diverged"}
             return {"ahead_by": self.ahead}
         if "/commits/" in endpoint:
             return {"commit": {"tree": {"sha": "same" if self.identical_trees else endpoint.rsplit("/", 1)[-1]}}}
@@ -128,16 +132,25 @@ class UpstreamTests(unittest.TestCase):
     def published(self):
         return any(c[:3] == ("gh", "pr", "create") or c[0] == "git" and "push" in c for c in self.runner.calls)
 
-    def test_dry_run_pairs_exact_release_source_and_apk_without_touching_upstream(self):
+    def test_dry_run_changes_only_apk_and_version_without_importing_private_history(self):
+        private = self.app / ".trail/private.md"
+        private.parent.mkdir()
+        private.write_text("PRIVATE TRAIL SENTINEL")
+        git(self.app, "add", ".")
+        git(self.app, "commit", "-qm", "Private notes")
+        git(self.app, "tag", "-f", "direct-v1.2.0")
         before = git(self.target, "rev-parse", "HEAD")
         self.assertIn("no push or PR", self.prepare())
         prepared = self.directory / "prepared/starpilot"
-        self.assertEqual(git(prepared, "rev-parse", "HEAD:" + cli.PREFIX), git(self.app, "rev-parse", "HEAD^{tree}"))
+        self.assertEqual(git(prepared, "rev-parse", "HEAD:" + cli.PREFIX), git(self.target, "rev-parse", "HEAD:" + cli.PREFIX))
         self.assertEqual((prepared / cli.APK).read_bytes(), self.runner.apk)
         self.assertEqual((prepared / (cli.APK + ".version")).read_text(), "1.2.0\n")
         self.assertEqual((prepared / "unrelated.txt").read_text(), "Preserve upstream content\n")
         self.assertEqual(git(self.target, "rev-parse", "HEAD"), before)
         self.assertFalse(self.published())
+        self.assertEqual(set(git(prepared, "diff", "--name-only", before, "HEAD").splitlines()), {cli.APK, cli.APK + ".version"})
+        self.assertEqual(git(prepared, "rev-list", "--count", before + "..HEAD"), "1")
+        self.assertNotIn(".trail", git(prepared, "rev-list", "--objects", "HEAD"))
 
     def test_publish_pushes_only_release_branch_and_targets_exact_upstream_branch(self):
         self.args.dry_run = False
@@ -156,11 +169,12 @@ class UpstreamTests(unittest.TestCase):
         self.assertEqual(self.prepare().strip(), "existing")
         self.assertFalse(Path(self.args.work_dir).exists())
 
-    def test_missing_split_stops_before_preparation(self):
-        self.runner.missing_split = True
-        with self.assertRaisesRegex(cli.CommandError, "Merge AppSplit first"):
+    def test_missing_installer_stops_preparation(self):
+        git(self.target, "rm", cli.APK)
+        git(self.target, "commit", "-qm", "No installer")
+        with self.assertRaisesRegex(cli.CommandError, "Galaxy installer"):
             self.prepare()
-        self.assertFalse(Path(self.args.work_dir).exists())
+        self.assertFalse(self.published())
 
     def test_play_release_cannot_be_shipped_as_direct(self):
         self.args.tag = "play-v1.2.0"
@@ -193,16 +207,16 @@ class UpstreamTests(unittest.TestCase):
         self.assertFalse(self.published())
 
     def test_equal_version_is_not_reissued(self):
-        (self.target / cli.PREFIX / "app/build.gradle.kts").write_text('versionCode = 33\nversionName = "1.2.0"\n')
+        (self.target / (cli.APK + ".version")).write_text("1.2.0\n")
         git(self.target, "add", ".")
         git(self.target, "commit", "-qm", "Already updated")
-        with self.assertRaisesRegex(cli.CommandError, "higher versionCode"):
+        with self.assertRaisesRegex(cli.CommandError, "newer Direct version"):
             self.prepare()
         self.assertFalse(self.published())
 
     def test_unrelated_staged_changes_never_push(self):
         self.runner.extra_staged_path = True
-        with self.assertRaisesRegex(cli.CommandError, "outside the Android"):
+        with self.assertRaisesRegex(cli.CommandError, "outside the APK"):
             self.prepare()
         self.assertFalse(self.published())
 

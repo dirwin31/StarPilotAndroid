@@ -2,6 +2,7 @@
 """Prepare Android release and development pull requests."""
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -97,11 +98,6 @@ def workspace(value):
 def upstream_pr(args, runner):
     if not re.fullmatch(r"direct-v[0-9]+(?:\.[0-9]+){1,3}", args.tag):
         raise CommandError("Use a Direct release tag, for example direct-v1.2.1")
-    try:
-        runner.api(f"repos/{args.target}/contents/{PREFIX}/SYNCED.md?ref={quote(args.base, safe='')}")
-    except CommandError as exc:
-        raise CommandError(f"Cannot find the Android split on {args.target}:{args.base}. "
-                           "Merge AppSplit first and check repository access.") from exc
     fork = runner.api(f"repos/{args.fork}")
     if not fork.get("permissions", {}).get("push"):
         raise CommandError("You need push access to --fork; use a writable StarPilot fork")
@@ -114,40 +110,42 @@ def upstream_pr(args, runner):
     asset = release_asset(runner.api(f"repos/{args.app_repo}/releases/tags/{args.tag}"), args.tag)
     directory = workspace(args.work_dir)
     print(f"Preparing update in {directory}", flush=True)
-    app = directory / "android"
     target = directory / "starpilot"
-    runner.run("git", "clone", "--single-branch", "--branch", args.tag, "--no-tags",
-               f"https://github.com/{args.app_repo}.git", str(app))
-    runner.run("git", "fetch", "--no-tags", "origin", "Direct-Distro:refs/remotes/origin/Direct-Distro", cwd=app)
-    runner.run("git", "merge-base", "--is-ancestor", "HEAD", "origin/Direct-Distro", cwd=app)
-    name, code = version((app / "app/build.gradle.kts").read_text())
+    comparison = runner.api(f"repos/{args.app_repo}/compare/{args.tag}...Direct-Distro")
+    if comparison.get("status") not in ("ahead", "identical"):
+        raise CommandError("The release tag must belong to Direct-Distro")
+    source = runner.api(f"repos/{args.app_repo}/contents/app/build.gradle.kts?ref={quote(args.tag, safe='')}")
+    name, code = version(base64.b64decode(source["content"]).decode())
     if args.tag != "direct-v" + name:
         raise CommandError("The release tag does not match its Android source version")
-    source_commit = runner.run("git", "rev-parse", "HEAD", cwd=app)
     runner.run("gh", "release", "download", args.tag, "--repo", args.app_repo,
                "--pattern", "galaxy-direct.apk", "--dir", str(directory))
     downloaded = directory / "galaxy-direct.apk"
     verify_asset(downloaded, asset)
     runner.run("git", "clone", "--filter=blob:none", "--no-checkout", "--single-branch", "--no-tags",
                "--branch", args.base, f"https://github.com/{args.target}.git", str(target))
-    runner.run("git", "sparse-checkout", "set", "--cone", PREFIX, str(Path(APK).parent), cwd=target)
+    runner.run("git", "sparse-checkout", "set", "--cone", str(Path(APK).parent), cwd=target)
     runner.run("git", "checkout", "-b", branch, "origin/" + args.base, cwd=target)
-    if not (target / PREFIX / "SYNCED.md").is_file():
-        raise CommandError("The target branch changed; its Android split is missing")
-    old_name, old_code = version((target / PREFIX / "app/build.gradle.kts").read_text())
-    if code <= old_code or name == old_name:
-        raise CommandError(f"Upstream already has Android {old_name} (code {old_code}). "
-                           "Publish a newer Direct version with a higher versionCode first.")
+    version_file = target / (APK + ".version")
+    if not (target / APK).is_file() or not version_file.is_file():
+        raise CommandError("The target must already contain the Galaxy installer and version file")
+    old_name = version_file.read_text().strip()
+    def numbers(value):
+        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", value):
+            raise CommandError("Cannot read the shipped installer version")
+        parts = tuple(map(int, value.split(".")))
+        return parts + (0,) * (4 - len(parts))
+    if numbers(name) <= numbers(old_name):
+        raise CommandError(f"Upstream already ships {old_name}; publish a newer Direct version first")
     for field in ("name", "email"):
         identity = runner.run("git", "config", "user." + field, cwd=ROOT)
         runner.run("git", "config", "user." + field, identity, cwd=target)
-    runner.run("git", "subtree", "pull", "--prefix=" + PREFIX, str(app), source_commit, "--squash", cwd=target)
     shutil.copyfile(downloaded, target / APK)
     (target / (APK + ".version")).write_text(name + "\n")
-    runner.run("git", "add", "--", PREFIX, APK, APK + ".version", cwd=target)
+    runner.run("git", "add", "--", APK, APK + ".version", cwd=target)
     paths = runner.run("git", "diff", "--cached", "--name-only", cwd=target).splitlines()
-    if any(not (p.startswith(PREFIX + "/") or p in (APK, APK + ".version")) for p in paths):
-        raise CommandError("The update includes files outside the Android source and installer")
+    if any(p not in (APK, APK + ".version") for p in paths):
+        raise CommandError("The update includes files outside the APK and version file")
     if not paths:
         print("The target already contains this update")
         return
@@ -160,7 +158,7 @@ def upstream_pr(args, runner):
                "push", f"https://github.com/{args.fork}.git", f"HEAD:refs/heads/{branch}", cwd=target)
     print(open_pr(runner, args.target, args.base, f"{owner}:{branch}",
                   f"Companion: Update Galaxy Direct to {name}",
-                  f"Ships Galaxy Direct {name} with the source from its published Android release.\n\n"
+                  f"Ships Galaxy Direct {name} from its published Android release; only the APK and version file change.\n\n"
                   "The downloaded installer matches GitHub's SHA-256 digest. No device software was rebuilt.\n", directory))
 
 
