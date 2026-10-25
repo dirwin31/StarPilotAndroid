@@ -59,3 +59,13 @@ Set `COMPANION_UPLOAD_KEYSTORE` and `COMPANION_UPLOAD_KEY_PASSWORD` in the relea
 Supply the privacy-policy URL, foreground-service declarations/videos for connectedDevice and location, foreground location disclosure, and data safety declarations for location shared to the user's comma and tokens/events processed by Firebase and the relay. No ads or analytics are included. Describe phone internet sharing and the need for a comma running StarPilot. Reviewer access: tap **No comma? Explore the demo**, then **Explore app features**; all demo data is simulated and remains offline.
 
 Physical verification remains required: Direct upgrade over 1.1.30 without losing pairings, side-by-side launchers, API 34–36 back/insets, route failover with page preservation, background push, and airplane-mode demo.
+
+## Automatic Play publishing
+
+Pushing a tag like `v1.2.1` (it must equal `versionName` in `app/build.gradle.kts`) builds, creates the GitHub Release and uploads the signed bundle to Play's internal track. Manual runs can pick another track, or `none`. Raise `versionCode` for every upload.
+
+One-time setup:
+
+1. Create the app in Play Console and upload the first bundle by hand. The API cannot create apps.
+2. In Play Console, Setup, API access, link a Google Cloud project and create a service account with a JSON key. Invite it under Users and permissions with Release apps to testing tracks (add production when ready).
+3. Store the JSON: `gh secret set PLAY_SERVICE_ACCOUNT_JSON --repo dirwin31/StarPilotAndroid --env android-release < key.json`. Without it the Play step is skipped.
