@@ -14,10 +14,13 @@ if [[ -z "${COMPANION_KEY_PASSWORD:-}" ]]; then
   COMPANION_PASSWORD_FILE="${COMPANION_PASSWORD_FILE:-$HOME/.starpilot/companion-signing-password}"
   export COMPANION_KEY_PASSWORD="$(cat "$COMPANION_PASSWORD_FILE")"
 fi
-"$ANDROID_ROOT/gradlew" -p "$ANDROID_ROOT" --no-daemon assembleRelease lintRelease
-COMPANION_OUTPUT="$ANDROID_ROOT/../../galaxy/bin/starpilot-companion.apk"
-cp "$ANDROID_ROOT/app/build/outputs/apk/release/app-release.apk" "$COMPANION_OUTPUT"
-python3 - "$ANDROID_ROOT/app/build/outputs/apk/release/output-metadata.json" "$COMPANION_OUTPUT.version" <<'PY'
+"$ANDROID_ROOT/gradlew" -p "$ANDROID_ROOT" --no-daemon assembleDirectRelease lintDirectRelease
+COMPANION_OUTPUT="${COMPANION_OUTPUT:-$ANDROID_ROOT/app/build/outputs/apk/direct/release/galaxy-direct.apk}"
+if [[ -d "$ANDROID_ROOT/../../galaxy/bin" ]]; then
+  COMPANION_OUTPUT="$ANDROID_ROOT/../../galaxy/bin/starpilot-companion.apk"
+fi
+cp "$ANDROID_ROOT/app/build/outputs/apk/direct/release/app-direct-release.apk" "$COMPANION_OUTPUT"
+python3 - "$ANDROID_ROOT/app/build/outputs/apk/direct/release/output-metadata.json" "$COMPANION_OUTPUT.version" <<'PY'
 import json
 import pathlib
 import sys

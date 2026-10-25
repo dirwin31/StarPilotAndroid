@@ -32,8 +32,8 @@ class UplinkService : Service() {
     }
     override fun onCreate() {
         super.onCreate()
-        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("uplink", "Phone internet", NotificationManager.IMPORTANCE_LOW))
-        startForeground(1, notification("Waiting for Galaxy Wi-Fi and mobile data"))
+        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(Notifications.UPLINK_CHANNEL, "Phone internet", NotificationManager.IMPORTANCE_LOW))
+        startForeground(Notifications.UPLINK, notification("Waiting for Galaxy Wi-Fi and mobile data"))
         bytes = prefs.getLong("bytes", 0); day = prefs.getString("day", "")!!
         Networks.manager(this).requestNetwork(NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), callback)
@@ -42,8 +42,8 @@ class UplinkService : Service() {
     private fun notification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, UplinkService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
-        return Notification.Builder(this, "uplink").setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("StarPilot phone internet").setContentText(text).setContentIntent(open).setOngoing(true)
+        return Notification.Builder(this, Notifications.UPLINK_CHANNEL).setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentTitle("Galaxy phone internet").setContentText(text).setContentIntent(open).setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Stop", stop).build()).build()
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -108,7 +108,7 @@ class UplinkService : Service() {
             update("Reconnecting to Galaxy…")
         }
     }
-    private fun update(text: String) { if (stopped) return; getSystemService(NotificationManager::class.java).notify(1, notification(text)) }
+    private fun update(text: String) { if (stopped) return; getSystemService(NotificationManager::class.java).notify(Notifications.UPLINK, notification(text)) }
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() {
         stopped = true

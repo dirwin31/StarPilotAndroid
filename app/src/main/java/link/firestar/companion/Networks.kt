@@ -34,6 +34,12 @@ object Networks {
         val path = rest.removePrefix(authority)
         return "$scheme://$authority${if (':' in authority) "" else ":8082"}$path"
     }
+    fun tunnelOrigin(value: String, slug: String): Boolean = runCatching {
+        val uri = java.net.URI(value)
+        uri.scheme == "https" && uri.host == "galaxy.firestar.link" && uri.port == -1 && uri.userInfo == null &&
+            TunnelCredential.SLUG.matches(slug) && uri.rawPath.startsWith("/$slug/") &&
+            uri.path.split('/').none { it == "." || it == ".." } && !uri.path.contains('\\') && !uri.path.contains("//") && !uri.path.contains('%')
+    }.getOrDefault(false)
     fun localOrigin(value: String): String? {
         val uri = Uri.parse(value)
         if (uri.scheme != "http" || uri.port != 8082 || uri.userInfo != null) return null

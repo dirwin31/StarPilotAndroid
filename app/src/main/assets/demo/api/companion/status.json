@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "enabled": false,
+  "connected": false,
+  "active": false,
+  "appAvailable": false,
+  "updateAvailable": false,
+  "bytes": 0,
+  "shippedVersion": "1.2.0",
+  "state": "disabled",
+  "reason": "Demo phone internet"
+}

@@ -1,0 +1,8 @@
+{
+  "page": "sentry",
+  "title": "Sentry demo",
+  "subtitle": "Simulated parked motion monitoring",
+  "rows": [],
+  "revision": "demo",
+  "parked": true
+}

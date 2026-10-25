@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "queueFull": false,
+  "subscriptionCount": 0,
+  "subscriptions": [],
+  "appSubscriptions": [],
+  "appPushAvailable": false,
+  "deliverySemantics": "Offline demo: alerts stay on this phone.",
+  "channels": {
+    "webPush": {
+      "enabled": false,
+      "configured": false,
+      "pending": 0,
+      "lastState": "idle",
+      "lastError": ""
+    },
+    "discord": {
+      "enabled": false,
+      "configured": false,
+      "pending": 0,
+      "lastState": "idle",
+      "lastError": ""
+    },
+    "webhook": {
+      "enabled": false,
+      "configured": false,
+      "pending": 0,
+      "lastState": "idle",
+      "lastError": ""
+    },
+    "ntfy": {
+      "enabled": false,
+      "configured": false,
+      "pending": 0,
+      "lastState": "idle",
+      "lastError": ""
+    }
+  }
+}

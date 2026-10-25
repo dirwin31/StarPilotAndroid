@@ -23,6 +23,7 @@ import kotlin.math.sin
 enum class Route(val title: String, val icon: Int) {
     GALAXY_WIFI("Galaxy Wi-Fi", R.drawable.ic_route_wifi),
     HOME_NETWORK("Home network", R.drawable.ic_route_lan),
+    TUNNEL("Remote", R.drawable.ic_route_auto),
     BLUETOOTH("Bluetooth", R.drawable.ic_route_bluetooth),
 }
 
@@ -162,7 +163,7 @@ class OrbitView(context: Context) : View(context) {
 
 /** The screen shown while not connected, and over the Galaxy page while it loads. */
 class ConnectScreen(private val activity: Activity, private val onRoute: (Route) -> Unit, onRetry: () -> Unit,
-                    onWifiSettings: () -> Unit, private val onAddress: (String) -> String?, onOptions: () -> Unit) {
+                    onWifiSettings: () -> Unit, private val onAddress: (String) -> String?, onOptions: () -> Unit, onDemo: () -> Unit) {
     private val dp = activity.resources.displayMetrics.density
     private fun px(value: Number) = (value.toFloat() * dp).roundToInt()
     private val orbit = OrbitView(activity)
@@ -219,6 +220,7 @@ class ConnectScreen(private val activity: Activity, private val onRoute: (Route)
             setOnClickListener { onRetry() }
         }, LinearLayout.LayoutParams(-1, px(52)).apply { topMargin = px(20) })
 
+        panel.addView(link("No comma? Explore the demo", onDemo), LinearLayout.LayoutParams(-1, -2))
         val links = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         links.addView(link("Wi-Fi settings", onWifiSettings), LinearLayout.LayoutParams(0, -2, 1f))
         links.addView(link("Type an address") { toggleAddress() }, LinearLayout.LayoutParams(0, -2, 1f))

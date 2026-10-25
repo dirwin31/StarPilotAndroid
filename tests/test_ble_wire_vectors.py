@@ -6,7 +6,10 @@ import sys
 import pytest
 
 ANDROID = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ANDROID.parents[1] / 'galaxy_bluetooth/bridge'))
+BRIDGE = ANDROID.parents[1] / 'galaxy_bluetooth/bridge'
+if not (BRIDGE / 'protocol.py').is_file():
+  pytest.skip('BLE cross-repo vectors run in StarPilot', allow_module_level=True)
+sys.path.insert(0, str(BRIDGE))
 import protocol
 
 

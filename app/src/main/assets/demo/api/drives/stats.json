@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "isMetric": true,
+  "analysis": {
+    "running": false,
+    "pending": 0,
+    "failed": 0,
+    "scanIncomplete": false
+  },
+  "totals": {
+    "distanceMeters": 120000,
+    "durationSeconds": 7200,
+    "engagedSeconds": 6400,
+    "drives": 4
+  },
+  "week": {
+    "distanceMeters": 120000,
+    "durationSeconds": 7200,
+    "engagedPercent": 89,
+    "drives": 4,
+    "timezone": "UTC",
+    "days": [
+      {
+        "date": "2026-10-18",
+        "distanceMeters": 20000
+      },
+      {
+        "date": "2026-10-19",
+        "distanceMeters": 20000
+      },
+      {
+        "date": "2026-10-20",
+        "distanceMeters": 20000
+      },
+      {
+        "date": "2026-10-21",
+        "distanceMeters": 20000
+      },
+      {
+        "date": "2026-10-22",
+        "distanceMeters": 20000
+      },
+      {
+        "date": "2026-10-23",
+        "distanceMeters": 20000
+      },
+      {
+        "date": "2026-10-24",
+        "distanceMeters": 0
+      }
+    ]
+  },
+  "lastDrive": null,
+  "recentDrives": [],
+  "records": [
+    {
+      "id": "longestDrive",
+      "label": "Longest drive",
+      "value": 42000,
+      "unit": "m"
+    }
+  ],
+  "models": [
+    {
+      "name": "Demo driving model",
+      "distanceMeters": 120000,
+      "durationSeconds": 7200,
+      "drives": 4
+    }
+  ]
+}

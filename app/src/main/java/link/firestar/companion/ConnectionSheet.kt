@@ -16,8 +16,9 @@ import kotlin.math.roundToInt
 
 /** How the app reaches comma, as stored in the "transport" preference. */
 enum class Transport(val key: String, val title: String, val icon: Int, val summary: String) {
-    AUTO("auto", "Automatic", R.drawable.ic_route_auto, "Always checks Galaxy Wi-Fi and your home network before Bluetooth."),
+    AUTO("auto", "Automatic", R.drawable.ic_route_auto, "Wi-Fi and LAN, then Remote, then Bluetooth."),
     WIFI("wifi", "Wi-Fi & LAN", R.drawable.ic_route_wifi, "Galaxy Wi-Fi or your home network. Never Bluetooth."),
+    REMOTE("remote", "Remote", R.drawable.ic_route_auto, "Remote · firestar.link"),
     BLUETOOTH("bluetooth", "Bluetooth", R.drawable.ic_route_bluetooth, "Bluetooth only, for when there's no Wi-Fi in reach.");
     companion object { fun of(key: String?) = entries.firstOrNull { it.key == key } ?: AUTO }
 }
@@ -42,6 +43,10 @@ class ConnectionSheet(private val activity: Activity, current: Transport) {
             }
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(16) })
         content.addView(summary, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(10) })
+        content.setOnApplyWindowInsetsListener { view, insets ->
+            view.setPadding(px(20) + insets.systemWindowInsetLeft, px(22), px(20) + insets.systemWindowInsetRight, px(20) + insets.systemWindowInsetBottom)
+            insets
+        }
         paint()
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         dialog.setContentView(ScrollView(activity).apply {

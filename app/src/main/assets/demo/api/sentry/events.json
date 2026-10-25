@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "source": "local",
+  "scanIncomplete": false,
+  "capacity": 512,
+  "storageBytes": 10000,
+  "storageIncomplete": false,
+  "events": [
+    {
+      "eventId": "dddddddddddddddddddddddddddddddd",
+      "kind": "warning",
+      "systemTimeMs": 1792800000000,
+      "images": [
+        "wide"
+      ]
+    }
+  ]
+}

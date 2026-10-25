@@ -37,10 +37,10 @@ class PhoneGpsService : Service(), LocationListener {
 
     override fun onCreate() {
         super.onCreate()
-        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("phone-gps", "Phone GPS", NotificationManager.IMPORTANCE_LOW))
+        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(Notifications.GPS_CHANNEL, "Phone GPS", NotificationManager.IMPORTANCE_LOW))
         val first = notification("Waiting for GPS")
         try {
-            if (Build.VERSION.SDK_INT >= 29) startForeground(2, first, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) else startForeground(2, first)
+            if (Build.VERSION.SDK_INT >= 29) startForeground(Notifications.PHONE_GPS, first, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) else startForeground(Notifications.PHONE_GPS, first)
             if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) throw SecurityException("Location permission")
             getSystemService(LocationManager::class.java).requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper())
         } catch (_: Exception) {
@@ -121,14 +121,14 @@ class PhoneGpsService : Service(), LocationListener {
     private fun notification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, PhoneGpsService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
-        return Notification.Builder(this, "phone-gps").setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("StarPilot phone GPS").setContentText(text).setContentIntent(open).setOngoing(true)
+        return Notification.Builder(this, Notifications.GPS_CHANNEL).setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentTitle("Galaxy phone GPS").setContentText(text).setContentIntent(open).setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Stop", stop).build()).build()
     }
     private fun update(text: String) {
         if (stopped || text == status) return
         status = text
-        getSystemService(NotificationManager::class.java).notify(2, notification(text))
+        getSystemService(NotificationManager::class.java).notify(Notifications.PHONE_GPS, notification(text))
     }
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() {

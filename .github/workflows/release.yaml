@@ -1,0 +1,53 @@
+name: Galaxy Android release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: android-release
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0"
+      - name: Test
+        run: |
+          ./gradlew --max-workers=1 testDirectDebugUnitTest testPlayDebugUnitTest
+          node --test push-relay/worker.test.js
+      - name: Restore signing keys
+        env:
+          DIRECT_KEY: ${{ secrets.COMPANION_KEYSTORE_BASE64 }}
+          UPLOAD_KEY: ${{ secrets.COMPANION_UPLOAD_KEYSTORE_BASE64 }}
+        run: |
+          umask 077
+          printf '%s' "$DIRECT_KEY" | base64 -d > "$RUNNER_TEMP/companion.jks"
+          printf '%s' "$UPLOAD_KEY" | base64 -d > "$RUNNER_TEMP/upload.jks"
+      - name: Build releases
+        env:
+          COMPANION_KEYSTORE: ${{ runner.temp }}/companion.jks
+          COMPANION_KEY_PASSWORD: ${{ secrets.COMPANION_KEY_PASSWORD }}
+          COMPANION_UPLOAD_KEYSTORE: ${{ runner.temp }}/upload.jks
+          COMPANION_UPLOAD_KEY_PASSWORD: ${{ secrets.COMPANION_UPLOAD_KEY_PASSWORD }}
+        run: |
+          test -n "$COMPANION_UPLOAD_KEY_PASSWORD"
+          ./build_apk.sh
+          ./build_play.sh
+          if unzip -l app/build/outputs/apk/direct/release/galaxy-direct.apk | grep -q 'assets/galaxy/'; then exit 1; fi
+      - name: Remove keys
+        if: always()
+        run: rm -f "$RUNNER_TEMP/companion.jks" "$RUNNER_TEMP/upload.jks"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release create "$RELEASE_TAG" app/build/outputs/apk/direct/release/galaxy-direct.apk app/build/outputs/bundle/playRelease/app-play-release.aab --title "Galaxy $RELEASE_TAG" --generate-notes

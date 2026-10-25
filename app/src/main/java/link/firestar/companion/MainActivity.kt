@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import java.net.HttpURLConnection
 import java.util.Base64
 import java.util.concurrent.*
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import android.content.Intent
 import android.graphics.Color
@@ -44,7 +45,6 @@ class MainActivity : Activity() {
     private val recovery = ConnectionRecovery({ discoverLan(it) }, { connect() }, { stopDiscovery() })
     private val handler = Handler(Looper.getMainLooper())
     private var pageWatchdog: Runnable? = null
-    private var pendingInstallOrigin: String? = null
     private var resumed = false
     private val knownWifi = mutableSetOf<Network>()
     private val wifiWatcher = object : ConnectivityManager.NetworkCallback() {
@@ -54,20 +54,73 @@ class MainActivity : Activity() {
             // Open Galaxy as soon as the phone joins a Wi-Fi network, without waiting for "Try again".
             handler.post {
                 val mayPreemptBluetooth = bluetoothAttemptAutomatic && screen?.state(Route.BLUETOOTH) == RouteState.TRYING
-                if (idle() || mayPreemptBluetooth) connect()
+                if (idle() || mayPreemptBluetooth) connect() else scheduleUpgrade()
             }
         }
-        override fun onLost(network: Network) { knownWifi.remove(network) }
+        override fun onLost(network: Network) { knownWifi.remove(network); handler.post {
+            if (activeRoute in setOf(Route.GALAXY_WIFI, Route.HOME_NETWORK) && Networks.wifi(this@MainActivity, false) == null) {
+                if (!fallbackFrom(activeRoute)) disconnected()
+            }
+        } }
     }
 
+    private val tunnel by lazy { TunnelStore(this) }
+    private var activeRoute: Route? = null
+    private var demoSession: DemoSession? = null
+    private var routeHash = "/"
+    private val routeDetails = mutableMapOf<Route, String>()
+    private fun pageHash(): String {
+        val requested = intent.getStringExtra("openRoute")?.takeIf { it.startsWith("/") && it.length <= 4096 }
+        intent.removeExtra("openRoute")
+        if (requested != null) routeHash = requested
+        return routeHash
+    }
+    private var routeError = ""
+    private val pollSentry = object : Runnable {
+        override fun run() {
+            if (resumed && web != null && pairProgress == null) SentryPush.api?.let { current -> Thread { runCatching { SentryPoller.poll(this@MainActivity, current) } }.start() }
+            handler.postDelayed(this, 120000)
+        }
+    }
+    private fun connectedSentry(transport: BleTransport? = null) {
+        val current = if (transport != null) SentryApi(origin, "", bridge = { path, body ->
+            val reply = transport.request(JSONObject().put("method", if (body == null) "GET" else "POST").put("path", path)
+                .put("headers", JSONObject().put("Content-Type", "application/json"))
+                .put("body", if (body == null) "" else Base64.getEncoder().encodeToString(body.toString().toByteArray())))
+            require(reply.optInt("status") == 200)
+            JSONObject(String(Base64.getDecoder().decode(reply.optString("body"))))
+        }) else SentryApi(origin, CookieManager.getInstance().getCookie(origin).orEmpty(),
+            if (activeRoute == Route.TUNNEL) Networks.manager(this).activeNetwork else Networks.commaLan(this)?.first)
+        SentryPush.registerIfNeeded(this, current)
+    }
+    private fun enableSentry(on: Boolean): Boolean {
+        if (on && !SentryPush.permitted(this)) { runOnUiThread { requestNotificationPermission(8) }; return false }
+        return SentryPush.enable(this, on)
+    }
+    private var upgradePending = false
+    private var upgradeDiscovery: LanDiscovery? = null
+    private val upgradeRoutes = object : Runnable {
+        override fun run() { if (resumed) scheduleUpgrade(); handler.postDelayed(this, 15000) }
+    }
+    private val defaultWatcher = object : ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) handler.post { if (demoSession == null && idle() && tunnel.load() != null) connect() else scheduleUpgrade() }
+        }
+    }
     private var origin = Networks.ORIGIN
     private var share: String? = null
     private val prefs by lazy { getSharedPreferences("companion", MODE_PRIVATE) }
+    private var backCallback: android.window.OnBackInvokedCallback? = null
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        if (Build.VERSION.SDK_INT >= 33) backCallback = android.window.OnBackInvokedCallback { navigateBack() }.also { onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, it) }
+        if (intent.getBooleanExtra("demo", false)) { showDemo(); return }
         share = intent.getStringExtra("share")?.take(8192)
-        AppUpdates.initialize(this)
-        AppUpdateCompletion.opened(this)
+        Distribution.initialize(this)
+        handler.postDelayed(pollSentry, 120000)
+        handler.postDelayed(upgradeRoutes, 15000)
+        if (prefs.getBoolean("sentryPushEnabled", false)) { FirebaseRegistration.start(this); SentryPollJob.schedule(this) }
+        Distribution.opened(this)
         val cm = Networks.manager(this)
         knownWifi.addAll(cm.allNetworks.filter { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true })
         // Galaxy Wi-Fi may have no internet, so do not require that capability.
@@ -75,8 +128,10 @@ class MainActivity : Activity() {
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), wifiWatcher, handler) }
         val bondFilter = android.content.IntentFilter(android.bluetooth.BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(bondWatcher, bondFilter, RECEIVER_EXPORTED) else registerReceiver(bondWatcher, bondFilter)
+        runCatching { cm.registerDefaultNetworkCallback(defaultWatcher, handler) }
         checkMusicBond()
-        if (!requestNotificationPermission(7)) connect(Networks.localOrigin(intent.getStringExtra(AppUpdates.ORIGIN_EXTRA) ?: ""))
+        if (intent.data?.scheme == "starpilot-remote") { disconnected(); acceptRemoteKey(intent.data.toString()); return }
+        if (!requestNotificationPermission(7)) connect(Networks.localOrigin(intent.getStringExtra(AppDistribution.ORIGIN_EXTRA) ?: ""))
         if (PhoneGpsService.enabled(prefs) && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             startForegroundService(Intent(this, PhoneGpsService::class.java))
         }
@@ -84,12 +139,19 @@ class MainActivity : Activity() {
     private fun idle() = resumed && !isFinishing && web == null && ble == null && discovery == null && lanPicker == null && screen?.busy() == false
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        AppUpdateCompletion.opened(this)
+        setIntent(intent)
+        if (intent.getBooleanExtra("demo", false)) { showDemo(); return }
+        if (intent.data?.scheme == "starpilot-remote") { acceptRemoteKey(intent.data.toString()); return }
+        Distribution.opened(this)
         share = intent.getStringExtra("share")?.take(8192)
-        connect(Networks.localOrigin(intent.getStringExtra(AppUpdates.ORIGIN_EXTRA) ?: ""))
+        connect(Networks.localOrigin(intent.getStringExtra(AppDistribution.ORIGIN_EXTRA) ?: ""))
     }
     /** Invalidates every older async result before a new route is allowed to win. */
     private fun supersedeConnection(): Int {
+        web?.url?.substringAfter('#', "")?.takeIf { it.startsWith("/") && it.length <= 4096 }?.let { routeHash = it }
+        prefs.edit().putString("lastRouteHash", routeHash).apply()
+        activeRoute = null
+        SentryPush.api = null
         stopDiscovery()
         val generation = connectionGeneration.incrementAndGet()
         jobs.values.forEach { it.cancel(false) }; jobs.clear(); worker.purge()
@@ -103,13 +165,15 @@ class MainActivity : Activity() {
         return generation
     }
     private fun connect(host: String? = null) {
+        if (demoSession != null) return
         val generation = supersedeConnection()
         val mode = prefs.getString("transport", "auto")
+        if (host == null && mode == "remote") { connectTunnel(); return }
         if (host == null && mode == "bluetooth") { connectBluetooth(); return }
         val hotspot = Networks.wifi(this)
         val wifi = hotspot ?: Networks.wifi(this, false)
         if (wifi == null) {
-            if (!bluetoothFallback()) disconnected()
+            if (!fallbackFrom(Route.HOME_NETWORK)) disconnected()
             return
         }
         val saved = Networks.localOrigin(prefs.getString("host", "") ?: "")
@@ -161,7 +225,10 @@ class MainActivity : Activity() {
             override fun onPageFinished(v: WebView, url: String) {
                 if (web === v && Networks.localOrigin(url) == origin) {
                     prefs.edit().putString("host", origin).apply(); share = null; revealWeb()
-                    AppUpdates.checkAsync(this@MainActivity)
+                    Distribution.checkAsync(this@MainActivity)
+                    GalaxyUpdates.checkAsync(this@MainActivity) {}
+                    connectedSentry()
+                    TunnelImport.importIfNeeded(this@MainActivity, origin, CookieManager.getInstance().getCookie(origin).orEmpty())
                     autoPairIfNeeded()
                 }
             }
@@ -176,7 +243,7 @@ class MainActivity : Activity() {
         // A comma that vanished mid-load can leave the page pending for a long time.
         val watchdogMs = if (route == Route.HOME_NETWORK && mode == "auto" && pairing.load() != null) 4000L else 10000L
         pageWatchdog = Runnable { if (web === view && screen != null) pageFailed(view) }.also { handler.postDelayed(it, watchdogMs) }
-        view.loadUrl(if (share != null) "$origin/?share=${Uri.encode(share)}#/navigation" else "$origin/#/galaxy")
+        view.loadUrl(if (share != null) "$origin/?share=${Uri.encode(share)}#/navigation" else "$origin/#${pageHash()}")
         if (prefs.getBoolean("enabled", false)) startForegroundService(Intent(this, UplinkService::class.java))
     }
     private fun probeWifi(network: Network, candidate: String, generation: Int, automatic: Boolean = true) {
@@ -199,9 +266,10 @@ class MainActivity : Activity() {
             connection?.let { probes.remove(generation, it) }
             runOnUiThread {
                 if (isFinishing || isDestroyed || generation != connectionGeneration.get()) return@runOnUiThread
+                routeDetails[route] = if (reachable) "Reachable" else "Galaxy did not answer"
                 if (reachable) connect(candidate)
                 else if (route == Route.HOME_NETWORK) discoverLan(automatic = automatic)
-                else if (!automatic || !bluetoothFallback()) disconnected().apply {
+                else if (!automatic || !fallbackFrom(Route.HOME_NETWORK)) disconnected().apply {
                     route(Route.GALAXY_WIFI, RouteState.FAILED, "Galaxy didn't answer")
                     detail("This phone is on the comma's Wi-Fi, but Galaxy didn't answer.")
                 }
@@ -222,7 +290,7 @@ class MainActivity : Activity() {
                 detail("comma didn't answer at ${address(failed)}. Its address may have changed, or comma is off this network.")
             }
         }
-        bluetoothFallback()
+        fallbackFrom(Route.HOME_NETWORK)
     }
     private fun disconnected(): ConnectScreen {
         supersedeConnection()
@@ -240,7 +308,7 @@ class MainActivity : Activity() {
             if (parent == null || parent.id != android.R.id.content) { parent?.removeView(existing.view); setContentView(existing.view) }
             return existing
         }
-        val created = ConnectScreen(this, ::tryRoute, { connect() }, { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, ::openTypedAddress, ::connections)
+        val created = ConnectScreen(this, ::tryRoute, { connect() }, { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, ::openTypedAddress, ::connections, ::showDemo)
         screen = created
         refreshRoutes(created)
         setContentView(created.view)
@@ -259,6 +327,7 @@ class MainActivity : Activity() {
             saved != null -> "Last found at ${address(saved)}"
             else -> "Tap to search"
         })
+        s.route(Route.TUNNEL, if (tunnel.load() != null) RouteState.IDLE else RouteState.UNAVAILABLE, if (tunnel.load() != null) "Key saved" else "Add remote access")
         val cached = GalaxyUpdates.store(this).readyRoot != null
         s.route(Route.BLUETOOTH, if (paired && !pairing.stale()) RouteState.IDLE else RouteState.UNAVAILABLE,
             if (!paired) "Not paired" else if (pairing.stale()) "Pairing expired, pair again" else if (cached) "Paired, controls only" else "Paired, needs one Wi-Fi visit first")
@@ -277,6 +346,7 @@ class MainActivity : Activity() {
                 else if (saved != null) probeWifi(wifi.first, saved, generation, automatic = false)
                 else discoverLan()
             }
+            Route.TUNNEL -> connectTunnel()
             Route.BLUETOOTH -> if (pairing.load() != null && !pairing.stale()) connectBluetooth() else {
                 supersedeConnection(); refreshRoutes(connectScreen()); pairPhone()
             }
@@ -291,6 +361,8 @@ class MainActivity : Activity() {
         connect(host); return null
     }
     private fun showWeb(view: WebView, route: Route, label: String, waitForPage: Boolean) {
+        activeRoute = route
+        routeDetails[route] = "Connected"
         view.setOnApplyWindowInsetsListener { v, insets ->
             v.setPadding(insets.systemWindowInsetLeft, 0, insets.systemWindowInsetRight, insets.systemWindowInsetBottom); insets
         }
@@ -310,7 +382,17 @@ class MainActivity : Activity() {
         overlay.dismiss()
     }
     private fun message(text: String) { if (isFinishing || isDestroyed) return; AlertDialog.Builder(this).setMessage(text).setPositiveButton("OK", null).show() }
+    private fun showDemo() {
+        demoSession?.close(); demoSession = null
+        SentryPush.suspended = true
+        supersedeConnection()
+        stopService(Intent(this, UplinkService::class.java)); stopService(Intent(this, PhoneGpsService::class.java))
+        SentryPollJob.cancel(this)
+        demoSession = DemoSession(this) { demoSession?.close(); demoSession = null; SentryPush.suspended = false; intent.removeExtra("demo"); disconnected() }
+        demoSession!!.show(intent.getStringExtra("openRoute") ?: "/")
+    }
     private fun connections() {
+        demoSession?.let { it.options(); return }
         ConnectionSheet(this, Transport.of(prefs.getString("transport", "auto")))
             .onTransport { prefs.edit().putString("transport", it.key).apply(); connect() }
             .group("Home network") {
@@ -325,6 +407,12 @@ class MainActivity : Activity() {
                     }.setNegativeButton("Cancel", null).show()
                 }
             }
+            .group("Remote · firestar.link") {
+                action("Sign in with Galaxy ID", "Use your Galaxy ID and password") { signInRemote() }
+                action("Paste remote key", "Connect once on Wi-Fi, or add remote access") { addRemoteKey() }
+                if (tunnel.load() != null) action("Forget remote key") { tunnel.clear(); if (activeRoute == Route.TUNNEL) connect() }
+                action("Details", "${Route.entries.joinToString("\n") { route -> route.title + ": " + (routeDetails[route] ?: "Not checked") }}\nKey present: ${tunnel.load() != null}, verified: ${tunnel.verified()}\n$routeError") {}
+            }
             .group("Bluetooth pairing") {
                 action("Add Bluetooth Phone Pairing", "First open Pair phone on comma (Settings > Bluetooth), then tap here") { pairPhone() }
                 action("Forget pairing on this phone") {
@@ -337,6 +425,14 @@ class MainActivity : Activity() {
                 else action("Share phone GPS with comma", "Comma uses it for navigation when its own GPS has no fix") { setPhoneGps(true) }
             }
             .group("This app") {
+                action("Demo", "Explore Galaxy offline") { showDemo() }
+                action("Sentry alerts", if (prefs.getBoolean("sentryPushEnabled", false)) "Enabled" else "Disabled") { enableSentry(!prefs.getBoolean("sentryPushEnabled", false)) }
+                action("Notification details", "Registered: ${prefs.getString("fcmRegisteredOrigin", "")}\n${prefs.getString("fcmAcknowledgement", "")}\nLast push: ${prefs.getLong("sentryLastPushAt", 0)}\nLast poll: ${prefs.getLong("sentryLastPollAt", 0)}") {
+                    val token = prefs.getString("fcmToken", "").orEmpty()
+                    if (token.isNotEmpty()) AlertDialog.Builder(this@MainActivity).setTitle("Push token").setMessage(token).setPositiveButton("Copy") { _, _ ->
+                        getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Push token", token))
+                    }.setNegativeButton("Close", null).show()
+                }
                 action("Notification settings") { appNotificationSettings() }
                 action("Refresh Galaxy screens", GalaxyUpdates.store(this@MainActivity).status) {
                     GalaxyUpdates.checkAsync(this@MainActivity) { status -> runOnUiThread { message(status) } }
@@ -356,37 +452,179 @@ class MainActivity : Activity() {
         }
         return false
     }
-    private fun requestAppUpdate(requestedOrigin: String = origin) {
-        val localOrigin = Networks.localOrigin(requestedOrigin)
-        if (bluetoothMode || localOrigin == null) {
-            message("Connect using Galaxy Wi-Fi or LAN to download the app update.")
-            return
-        }
-        if (!packageManager.canRequestPackageInstalls()) {
-            pendingInstallOrigin = localOrigin
-            Toast.makeText(this, "Allow StarPilot to install its downloaded update, then return.", Toast.LENGTH_LONG).show()
-            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
-            return
-        }
-        pendingInstallOrigin = null
-        val network = (if (localOrigin == Networks.ORIGIN) Networks.wifi(this) else Networks.wifi(this, false))?.first
-        if (network == null) {
-            message("Reconnect to the same Wi-Fi as comma, then try the update again.")
-            return
-        }
-        if (!AppInstaller.start(this, network, localOrigin)) Toast.makeText(this, "An app update is already in progress.", Toast.LENGTH_LONG).show()
-    }
+    private fun requestAppUpdate(requestedOrigin: String = origin) = Distribution.requestUpdate(this, requestedOrigin)
     private var discovery: LanDiscovery? = null
     private var discoveryAutomatic = false
     private var lanPicker: AlertDialog? = null
     private fun stopDiscovery() {
+        upgradeDiscovery?.close(); upgradeDiscovery = null
         probes.values.forEach { it.disconnect() }; probes.clear()
         discovery?.close(); discovery = null
         lanPicker?.dismiss(); lanPicker = null
     }
-    private fun bluetoothFallback(): Boolean {
-        if (prefs.getString("transport", "auto") != "auto" || pairing.load() == null || pairing.stale()) return false
-        connectBluetooth(automatic = true); return true
+    private fun fallbackFrom(after: Route?): Boolean {
+        val cm = Networks.manager(this)
+        val internet = cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        val next = RoutePlanner.next(after, prefs.getString("transport", "auto") ?: "auto", Networks.wifi(this, false) != null,
+            internet, tunnel.load() != null, pairing.load() != null && !pairing.stale())
+        when (next) {
+            Route.TUNNEL -> connectTunnel()
+            Route.BLUETOOTH -> connectBluetooth(automatic = true)
+            else -> return false
+        }
+        return true
+    }
+    private fun scheduleUpgrade() {
+        if (demoSession != null || pairProgress != null || upgradeDiscovery != null || upgradePending || prefs.getString("transport", "auto") != "auto" || activeRoute !in setOf(Route.TUNNEL, Route.BLUETOOTH)) return
+        upgradePending = true
+        handler.postDelayed({
+            upgradePending = false
+            val generation = connectionGeneration.get()
+            val current = activeRoute ?: return@postDelayed
+            if (prefs.getString("transport", "auto") != "auto") return@postDelayed
+            val lan = Networks.commaLan(this)
+            if (lan == null) Networks.wifi(this, false)?.let { wifi ->
+                val search = LanDiscovery(this, wifi.first, 3000L) { hosts, _ ->
+                    upgradeDiscovery = null
+                    if (generation == connectionGeneration.get() && prefs.getString("transport", "auto") == "auto" && hosts.isNotEmpty()) connect(hosts.first())
+                }
+                upgradeDiscovery = search; search.start()
+            }
+            val credential = tunnel.load()
+            val cookie = lan?.let { CookieManager.getInstance().getCookie(it.second) }
+            Thread {
+                val lanOk = lan != null && GalaxyProbe.reachable(lan.first, lan.second, cookie) {}
+                val remote = if (!lanOk && current == Route.BLUETOOTH && credential != null) TunnelProbe.check(this, credential) else null
+                runOnUiThread {
+                    if (generation != connectionGeneration.get() || prefs.getString("transport", "auto") != "auto") return@runOnUiThread
+                    if (lanOk) connect(lan!!.second)
+                    else if (remote == TunnelProbe.Result.REACHABLE) { supersedeConnection(); showTunnel(credential!!) }
+                    else if (remote == TunnelProbe.Result.BAD_KEY) tunnel.clear()
+                }
+            }.start()
+        }, 2000)
+    }
+    private fun connectTunnel() {
+        val credential = tunnel.load()
+        if (credential == null) { disconnected(); addRemoteKey(); return }
+        val generation = supersedeConnection()
+        connectScreen().apply { route(Route.TUNNEL, RouteState.TRYING, "Checking firestar.link…"); headline("Opening Remote") }
+        Thread {
+            val result = TunnelProbe.check(this, credential)
+            runOnUiThread {
+                if (generation != connectionGeneration.get() || isDestroyed) return@runOnUiThread
+                if (result == TunnelProbe.Result.REACHABLE) showTunnel(credential)
+                else {
+                    routeError = if (result == TunnelProbe.Result.BAD_KEY) "Key didn't work. Check it in Galaxy → Access." else "Remote is unreachable"
+                    routeDetails[Route.TUNNEL] = routeError
+                    if (result == TunnelProbe.Result.BAD_KEY) tunnel.clear()
+                    if (!fallbackFrom(Route.TUNNEL)) disconnected().apply { route(Route.TUNNEL, RouteState.FAILED, routeError) }
+                }
+            }
+        }.start()
+    }
+    private fun addRemoteKey() {
+        val field = EditText(this).apply { setSingleLine(); hint = "slug:secret" }
+        AlertDialog.Builder(this).setTitle("Add remote key").setView(field)
+            .setPositiveButton("Connect") { _, _ -> acceptRemoteKey(field.text.toString()) }.setNegativeButton("Cancel", null).show()
+    }
+    private fun acceptRemoteKey(raw: String) {
+        val credential = TunnelCredential.parse(raw)
+        if (credential == null) { message("Key didn't work. Check it in Galaxy → Access."); return }
+        val generation = connectionGeneration.get()
+        Thread {
+            val result = TunnelProbe.check(this, credential)
+            runOnUiThread {
+                if (isDestroyed || generation != connectionGeneration.get()) return@runOnUiThread
+                if (result == TunnelProbe.Result.REACHABLE) { tunnel.save(credential); connectTunnel() }
+                else message(if (result == TunnelProbe.Result.BAD_KEY) "Key didn't work. Check it in Galaxy → Access." else "Remote is unreachable. Try again when comma and this phone have internet.")
+            }
+        }.start()
+    }
+    private fun signInRemote() {
+        val field = EditText(this).apply { setSingleLine(); hint = "Galaxy ID or remote URL" }
+        AlertDialog.Builder(this).setTitle("Sign in with Galaxy ID").setView(field).setNegativeButton("Cancel", null)
+            .setPositiveButton("Continue") { _, _ ->
+                val slug = TunnelCredential.galaxyId(field.text.toString())
+                if (slug == null) message("Enter the 16-character Galaxy ID from your remote link.") else remoteLogin(slug)
+            }.show()
+    }
+    private fun remoteLogin(slug: String) {
+        Networks.manager(this).bindProcessToNetwork(null)
+        val view = WebView(this)
+        view.settings.javaScriptEnabled = true; view.settings.domStorageEnabled = true
+        view.settings.allowFileAccess = false; view.settings.allowContentAccess = false
+        view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
+        val dialog = AlertDialog.Builder(this).setTitle("Sign in at galaxy.firestar.link").setView(view).setNegativeButton("Cancel", null).create()
+        var checking = false
+        fun allowed(url: Uri) = url.scheme == "https" && url.host == "galaxy.firestar.link" && url.port == -1 && url.userInfo == null
+        view.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest) = !allowed(request.url)
+            override fun shouldInterceptRequest(v: WebView, request: WebResourceRequest): WebResourceResponse? =
+                if (allowed(request.url)) null else WebResourceResponse("text/plain", "UTF-8", 403, "Denied", emptyMap(), ByteArrayInputStream(byteArrayOf()))
+            override fun onPageFinished(v: WebView, url: String) {
+                if (checking || !dialog.isShowing) return
+                val raw = CookieManager.getInstance().getCookie("https://galaxy.firestar.link").orEmpty().split(';')
+                    .map { it.trim() }.firstOrNull { it.startsWith("galaxy_session=") }?.substringAfter('=') ?: return
+                val credential = TunnelCredential.parse(raw) ?: runCatching {
+                    val decoded = java.net.URLDecoder.decode(raw, "UTF-8")
+                    val map = JSONObject(String(Base64.getUrlDecoder().decode(decoded)))
+                    TunnelCredential.parse("$slug:${map.optString(slug)}")
+                }.getOrNull() ?: return
+                if (credential.slug != slug) return
+                checking = true
+                Thread {
+                    val result = TunnelProbe.check(this@MainActivity, credential)
+                    runOnUiThread {
+                        checking = false
+                        if (dialog.isShowing && result == TunnelProbe.Result.REACHABLE) { tunnel.save(credential); dialog.dismiss(); connectTunnel() }
+                    }
+                }.start()
+            }
+        }
+        val timeout = Runnable { if (dialog.isShowing) { dialog.dismiss(); message("Sign-in timed out. Please try again.") } }
+        dialog.setOnDismissListener { handler.removeCallbacks(timeout); view.stopLoading(); view.destroy() }
+        dialog.show(); handler.postDelayed(timeout, 300000); view.loadUrl("https://galaxy.firestar.link/$slug/")
+    }
+    private fun showTunnel(credential: TunnelCredential) {
+        origin = credential.webUrl.trimEnd('/')
+        val view = WebView(this); web = view
+        view.setBackgroundColor(Color.rgb(7, 7, 18))
+        view.settings.javaScriptEnabled = true; view.settings.domStorageEnabled = true
+        view.settings.allowFileAccess = false; view.settings.allowContentAccess = false
+        view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
+        view.addJavascriptInterface(RemoteBridge(), "StarPilotApp")
+        view.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest) = !Networks.tunnelOrigin(request.url.toString(), credential.slug)
+            override fun shouldInterceptRequest(v: WebView, request: WebResourceRequest): WebResourceResponse? =
+                if (Networks.tunnelOrigin(request.url.toString(), credential.slug)) null else WebResourceResponse("text/plain", "UTF-8", 403, "Denied", emptyMap(), ByteArrayInputStream(byteArrayOf()))
+            override fun onPageFinished(v: WebView, url: String) { if (web === v) { revealWeb(); connectedSentry() } }
+            override fun onReceivedHttpError(v: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (request.isForMainFrame && response.statusCode in setOf(401, 403)) runOnUiThread {
+                    if (web === v) { tunnel.clear(); if (!fallbackFrom(Route.TUNNEL)) disconnected() }
+                }
+            }
+            override fun onReceivedError(v: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame) runOnUiThread { if (web === v && !fallbackFrom(Route.TUNNEL)) disconnected() }
+            }
+        }
+        showWeb(view, Route.TUNNEL, "Remote · firestar.link", waitForPage = true)
+        CookieManager.getInstance().setCookie("https://galaxy.firestar.link", "galaxy_session=${credential.sessionToken}; Path=/; Secure; HttpOnly") {
+            if (web === view) view.loadUrl(credential.webUrl + "#" + pageHash())
+        }
+    }
+    inner class RemoteBridge {
+        @JavascriptInterface fun bluetooth() = bluetoothMode
+        @JavascriptInterface fun sentryPush() = SentryPush.state(this@MainActivity)
+        @JavascriptInterface fun setSentryPush(on: Boolean) = enableSentry(on)
+        @JavascriptInterface fun connectionOptions() { runOnUiThread { connections() } }
+        @JavascriptInterface fun distribution() = BuildConfig.DISTRIBUTION
+        @JavascriptInterface fun version() = BuildConfig.VERSION_NAME
+        @JavascriptInterface fun remoteKeyState() = JSONObject().put("present", tunnel.load() != null).put("verified", tunnel.verified()).toString()
+        @JavascriptInterface fun addRemoteKey() { runOnUiThread { this@MainActivity.addRemoteKey() } }
+        @JavascriptInterface fun demo() = false
     }
     /** [fromMenu] keeps the old menu behavior: always confirm the address, then stay on Wi-Fi/LAN. */
     private fun discoverLan(automatic: Boolean = false, fromMenu: Boolean = false) {
@@ -394,7 +632,7 @@ class MainActivity : Activity() {
         if (wifi == null) {
             val text = "Join the same Wi-Fi network as comma first."
             screen?.route(Route.HOME_NETWORK, RouteState.UNAVAILABLE, "Not on Wi-Fi")
-            if (automatic && bluetoothFallback()) return
+            if (automatic && fallbackFrom(Route.HOME_NETWORK)) return
             screen?.detail(text) ?: message(text)
             return
         }
@@ -413,7 +651,7 @@ class MainActivity : Activity() {
                 fun cancel() {
                     if (generation != connectionGeneration.get() || web != null || ble != null) return
                     screen?.route(Route.HOME_NETWORK, RouteState.IDLE, "Tap to search again")
-                    if (automatic) bluetoothFallback()
+                    if (automatic) fallbackFrom(Route.HOME_NETWORK)
                 }
                 val s = screen
                 if (hosts.isEmpty()) {
@@ -421,7 +659,7 @@ class MainActivity : Activity() {
                         "A new install needs a few minutes parked with internet before comma can be found. " +
                         "If your router blocks discovery, type comma's address instead."
                     s?.route(Route.HOME_NETWORK, RouteState.FAILED, "No comma found")
-                    if (!(automatic && bluetoothFallback())) {
+                    if (!(automatic && fallbackFrom(Route.HOME_NETWORK))) {
                         if (s != null) { s.headline("Connect to comma"); s.detail(text) } else message(text)
                     }
                 } else if (hosts.size == 1 && !fromMenu) select(hosts.single())
@@ -731,6 +969,12 @@ class MainActivity : Activity() {
         (if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT) else emptyArray()) +
         (if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray())
     private fun setPhoneGps(enabled: Boolean) {
+        if (enabled && !prefs.getBoolean("gpsDisclosureAccepted", false)) {
+            AlertDialog.Builder(this).setTitle("Phone GPS").setMessage("Galaxy sends this phone's location to your comma device to improve navigation while driving. Location is only used while the Phone GPS notification is showing.")
+                .setPositiveButton("Continue") { _, _ -> prefs.edit().putBoolean("gpsDisclosureAccepted", true).apply(); setPhoneGps(true) }
+                .setNegativeButton("Cancel", null).show()
+            return
+        }
         if (!enabled) { prefs.edit().putBoolean("phoneGps", false).apply(); stopService(Intent(this, PhoneGpsService::class.java)); return }
         val missing = phoneGpsPermissions().filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) { requestPermissions(missing.toTypedArray(), 4); return }
@@ -811,8 +1055,12 @@ class MainActivity : Activity() {
     }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code, permissions, results)
-        if ((code == 1 || code == 7) && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) AppUpdates.checkAsync(this)
-        if (code == 7) connect(Networks.localOrigin(intent.getStringExtra(AppUpdates.ORIGIN_EXTRA) ?: ""))
+        if (demoSession != null) {
+            if (code == 9 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) demoSession?.gpsGranted()
+            return
+        }
+        if ((code == 1 || code == 7) && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) Distribution.checkAsync(this)
+        if (code == 7) connect(Networks.localOrigin(intent.getStringExtra(AppDistribution.ORIGIN_EXTRA) ?: ""))
         if (code == 5 && results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) pairPhone()
         if (code == 6) {
             if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) runAutoPair()
@@ -840,7 +1088,7 @@ class MainActivity : Activity() {
         view.settings.javaScriptEnabled = true; view.settings.domStorageEnabled = true
         view.settings.allowFileAccess = false; view.settings.allowContentAccess = false
         view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-        view.addJavascriptInterface(Bridge(), "StarPilotApp")
+        view.addJavascriptInterface(RemoteBridge(), "StarPilotApp")
         view.addJavascriptInterface(object {
             @JavascriptInterface fun cancel(id: String) { jobs.remove(id)?.cancel(false); worker.purge() }
             @JavascriptInterface fun request(id: String, raw: String) {
@@ -890,7 +1138,15 @@ class MainActivity : Activity() {
                     response(type, data)
                 } catch (_: Exception) { response("text/plain", byteArrayOf(), 404) }
             }
-            override fun onPageFinished(v: WebView, url: String) { if (web === v) share = null }
+            override fun onPageFinished(v: WebView, url: String) {
+                if (web !== v) return
+                share = null
+                connectedSentry(transport)
+                if (tunnel.load() == null) try { worker.execute { runCatching {
+                    val reply = transport.request(JSONObject().put("method", "GET").put("path", "/api/galaxy/session").put("headers", JSONObject()).put("body", ""))
+                    if (reply.optInt("status") == 200) TunnelImport.accept(this@MainActivity, JSONObject(String(Base64.getDecoder().decode(reply.optString("body")))))
+                } } } catch (_: RejectedExecutionException) {}
+            }
         }
         showWeb(view, Route.BLUETOOTH, "Bluetooth, controls only", waitForPage = false)
         try { worker.execute { runCatching {
@@ -899,27 +1155,57 @@ class MainActivity : Activity() {
                 runOnUiThread { if (web === view) Toast.makeText(this, "Galaxy screens are from an older comma build. Connect over Wi-Fi to refresh.", Toast.LENGTH_LONG).show() }
             }
         } } } catch (_: RejectedExecutionException) {}
-        view.loadUrl(if (share != null) "$origin/?share=${Uri.encode(share)}#/navigation" else "$origin/#/galaxy")
+        view.loadUrl(if (share != null) "$origin/?share=${Uri.encode(share)}#/navigation" else "$origin/#${pageHash()}")
     }
     inner class Bridge {
+        @JavascriptInterface fun sentryPush() = SentryPush.state(this@MainActivity)
+        @JavascriptInterface fun setSentryPush(on: Boolean) = enableSentry(on)
+        @JavascriptInterface fun remoteKeyState() = RemoteBridge().remoteKeyState()
+        @JavascriptInterface fun addRemoteKey() = RemoteBridge().addRemoteKey()
+        @JavascriptInterface fun demo() = false
         @JavascriptInterface fun bluetooth() = bluetoothMode
         @JavascriptInterface fun connectionOptions() { runOnUiThread { connections() } }
+        @JavascriptInterface fun distribution() = BuildConfig.DISTRIBUTION
         @JavascriptInterface fun version() = BuildConfig.VERSION_NAME
         @JavascriptInterface fun installUpdate() { runOnUiThread { requestAppUpdate() } }
         @JavascriptInterface fun uplinkState() = JSONObject().put("enabled", prefs.getBoolean("enabled", false)).put("autoStart", prefs.getBoolean("autoStart", false))
             .put("bytes", if (prefs.getString("day", "") == java.time.LocalDate.now().toString()) prefs.getLong("bytes", 0) else 0).toString()
-        @JavascriptInterface fun setUplinkEnabled(enabled: Boolean) { runOnUiThread {
-            prefs.edit().putBoolean("enabled", enabled).apply()
-            if (enabled) startForegroundService(Intent(this@MainActivity, UplinkService::class.java))
-            else stopService(Intent(this@MainActivity, UplinkService::class.java))
-        } }
+        @JavascriptInterface fun setUplinkEnabled(enabled: Boolean): Boolean {
+            if (enabled && !prefs.getBoolean("uplinkDisclosureAccepted", false)) {
+                val answer = java.util.concurrent.CountDownLatch(1)
+                val accepted = AtomicBoolean(false)
+                var dialog: AlertDialog? = null
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) { answer.countDown(); return@runOnUiThread }
+                    dialog = AlertDialog.Builder(this@MainActivity).setTitle("Phone internet").setMessage("Shares this phone's mobile data with your comma device over its Wi-Fi hotspot. Only your comma can connect, and a notification with Stop shows while it's active. Your carrier may count this as hotspot usage.")
+                        .setPositiveButton("Continue") { _, _ -> prefs.edit().putBoolean("uplinkDisclosureAccepted", true).apply(); accepted.set(true) }
+                        .setNegativeButton("Cancel", null).setOnDismissListener { answer.countDown() }.show()
+                }
+                if (!answer.await(60, TimeUnit.SECONDS)) { runOnUiThread { dialog?.dismiss() }; return false }
+                if (!accepted.get()) return false
+            }
+            runOnUiThread {
+                prefs.edit().putBoolean("enabled", enabled).apply()
+                if (enabled) startForegroundService(Intent(this@MainActivity, UplinkService::class.java))
+                else stopService(Intent(this@MainActivity, UplinkService::class.java))
+            }
+            return true
+        }
         @JavascriptInterface fun setAutoStart(enabled: Boolean) { prefs.edit().putBoolean("autoStart", enabled).apply() }
         @JavascriptInterface fun openWifiSettings() { runOnUiThread { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) } }
     }
-    @Deprecated("Legacy back handling") override fun onBackPressed() { if (web?.canGoBack() == true) web?.goBack() else super.onBackPressed() }
+    private fun navigateBack() {
+        if (demoSession != null) { if (demoSession!!.web.canGoBack()) demoSession!!.web.goBack() else { demoSession?.close(); demoSession = null; SentryPush.suspended = false; intent.removeExtra("demo"); disconnected() }; return }
+        if (web?.canGoBack() == true) web?.goBack() else {
+            if (Build.VERSION.SDK_INT >= 33) backCallback?.let { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it) }
+            finish()
+        }
+    }
+    @android.annotation.SuppressLint("GestureBackNavigation")
+    @Deprecated("Legacy back handling for API 26–32") override fun onBackPressed() = navigateBack()
     override fun onResume() {
-        super.onResume(); resumed = true; recovery.resumed(); AppUpdates.checkAsync(this); checkMusicBond()
-        pendingInstallOrigin?.let { if (packageManager.canRequestPackageInstalls()) requestAppUpdate(it) }
+        super.onResume(); resumed = true; if (demoSession != null) return; recovery.resumed(); GalaxyUpdates.checkAsync(this) {}; Distribution.checkAsync(this); checkMusicBond()
+        Distribution.resume(this)
     }
     override fun onPause() { resumed = false; super.onPause() }
     override fun onStop() {
@@ -927,9 +1213,12 @@ class MainActivity : Activity() {
         super.onStop()
     }
     override fun onDestroy() {
+        demoSession?.close(); demoSession = null; SentryPush.suspended = false
+        SentryPush.api = null
         pairCancelled = true; pairTransport?.close(); hidePairProgress()
         stopDiscovery(); clearWatchdog(); handler.removeCallbacksAndMessages(null)
         runCatching { Networks.manager(this).unregisterNetworkCallback(wifiWatcher) }
+        runCatching { Networks.manager(this).unregisterNetworkCallback(defaultWatcher) }
         runCatching { unregisterReceiver(bondWatcher) }
         connectionGeneration.incrementAndGet(); ble?.close(); worker.shutdownNow()
         web?.destroy(); Networks.manager(this).bindProcessToNetwork(null); super.onDestroy()

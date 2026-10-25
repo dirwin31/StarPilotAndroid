@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "catalog": [
+    {
+      "id": "demo",
+      "name": "Demo driving model",
+      "selectable": true
+    }
+  ],
+  "requestedId": "demo",
+  "loadedId": null,
+  "variant": null,
+  "health": "identity-unavailable",
+  "fallbackReason": null,
+  "artifactSha256": null,
+  "pendingNextStart": false
+}

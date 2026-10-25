@@ -20,8 +20,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 object AppUpdates {
-    private const val CHANNEL = "app_updates"
-    private const val NOTIFICATION = 2
+    private const val CHANNEL = Notifications.UPDATE_CHANNEL
+    private const val NOTIFICATION = Notifications.APP_UPDATE
     private const val JOB = 2
     const val ORIGIN_EXTRA = "updateOrigin"
     private val executor = Executors.newSingleThreadExecutor()
@@ -30,8 +30,9 @@ object AppUpdates {
 
     fun initialize(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
+        manager.activeNotifications.firstOrNull { it.id == Notifications.PHONE_GPS && it.notification.extras.containsKey("availableVersion") }?.let { manager.cancel(it.id) }
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "App updates", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "A notification when your comma has a newer StarPilot Android app"
+            description = "A notification when your comma has a newer Galaxy Android app"
         })
         // Remove an old update notification after that version has been installed.
         manager.activeNotifications.firstOrNull { it.id == NOTIFICATION }?.let {
@@ -80,10 +81,10 @@ object AppUpdates {
             if (!AppUpdatePolicy.shouldNotify(available, BuildConfig.VERSION_NAME, status.optBoolean("appAvailable"), allowed,
                     prefs.getString("notifiedAppVersion", "") ?: "")) return
             val open = PendingIntent.getActivity(context, NOTIFICATION,
-                Intent(context, MainActivity::class.java).putExtra(ORIGIN_EXTRA, origin),
+                Intent(context, MainActivity::class.java).putExtra(ORIGIN_EXTRA, origin).putExtra("openRoute", "/galaxy"),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             val notification = Notification.Builder(context, CHANNEL).setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setContentTitle("StarPilot app update available")
+                .setContentTitle("Galaxy app update available")
                 .setContentText("Version $available is ready. Tap to open Galaxy and update the app.")
                 .setContentIntent(open).setAutoCancel(true)
                 .addExtras(android.os.Bundle().apply { putString("availableVersion", available) }).build()

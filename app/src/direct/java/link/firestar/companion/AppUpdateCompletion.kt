@@ -28,20 +28,20 @@ class AppUpdateCompletion : BroadcastReceiver() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         manager.notify(NOTIFICATION, Notification.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("StarPilot update installed")
-            .setContentText("Version ${BuildConfig.VERSION_NAME} is ready. Tap to reopen StarPilot.")
+            .setContentTitle("Galaxy update installed")
+            .setContentText("Version ${BuildConfig.VERSION_NAME} is ready. Tap to reopen Galaxy.")
             .setContentIntent(open).setAutoCancel(true)
             .addAction(Notification.Action.Builder(null, "Reopen", open).build()).build())
     }
 
     companion object {
-        private const val CHANNEL = "app_update_completed"
-        private const val NOTIFICATION = 3
+        private const val CHANNEL = Notifications.UPDATE_DONE_CHANNEL
+        private const val NOTIFICATION = Notifications.APP_UPDATE_DONE
 
         fun opened(context: Context) {
             val prefs = context.getSharedPreferences("companion", Context.MODE_PRIVATE)
             if (prefs.getInt("completedAppCode", -1) == BuildConfig.VERSION_CODE) {
-                Toast.makeText(context, "Updated to StarPilot ${BuildConfig.VERSION_NAME}", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Updated to Galaxy ${BuildConfig.VERSION_NAME}", Toast.LENGTH_LONG).show()
             }
             prefs.edit().putInt("lastOpenedAppCode", BuildConfig.VERSION_CODE).remove("completedAppCode").apply()
             context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION)

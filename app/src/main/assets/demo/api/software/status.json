@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "installed": {
+    "version": "1.2.0",
+    "displayVersion": "Galaxy demo",
+    "branch": "Demo",
+    "commit": null
+  },
+  "updater": {
+    "state": "idle",
+    "targetBranch": null,
+    "lastSuccessAt": null,
+    "lastFetchAt": null,
+    "targetChangeFound": false,
+    "finalizedUpdateReady": false,
+    "failedCount": 0
+  }
+}
