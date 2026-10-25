@@ -1,0 +1,10 @@
+name = "galaxy-push-relay"
+main = "worker.js"
+compatibility_date = "2026-10-24"
+
+[vars]
+FCM_PROJECT_ID = "replace-with-firebase-project-id"
+
+[[kv_namespaces]]
+binding = "RATE"
+id = "replace-with-rate-namespace-id"
