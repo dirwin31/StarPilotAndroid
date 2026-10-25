@@ -81,12 +81,17 @@ object SentryPush {
             p.edit().putString("sentrySeenIds", JSONArray(dedupe.ids()).toString())
                 .putLong("sentryLastSeenNs", maxOf(p.getLong("sentryLastSeenNs", 0), (data["wallTimeNs"]?.toLongOrNull() ?: 0).coerceIn(0, System.currentTimeMillis() * 1000000)))
                 .apply { if (fromPush) putLong("sentryLastPushAt", System.currentTimeMillis()) }.commit()
-            Thread { runCatching {
-                val current = api ?: SentryApi.best(ctx) ?: return@runCatching
-                val bytes = current.bytes("/api/sentry/image/$id/wide")
-                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                if (bitmap != null) manager.notify(notificationId, builder.setStyle(Notification.BigPictureStyle().bigPicture(bitmap)).build())
-            } }.start()
+            Thread {
+                val image = java.util.concurrent.FutureTask {
+                    val current = api ?: SentryApi.best(ctx)
+                    current?.bytes("/api/sentry/image/$id/wide")?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                }
+                Thread(image).apply { isDaemon = true; start() }
+                try {
+                    val bitmap = image.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                    if (bitmap != null && !suspended) manager.notify(notificationId, builder.setStyle(Notification.BigPictureStyle().bigPicture(bitmap)).build())
+                } catch (_: Exception) {} finally { image.cancel(true) }
+            }.start()
         }
         return true
     }

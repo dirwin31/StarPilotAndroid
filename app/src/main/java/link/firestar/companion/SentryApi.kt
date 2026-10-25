@@ -10,6 +10,7 @@ class SentryApi(val origin: String, private val cookie: String, private val netw
                 private val bridge: ((String, JSONObject?) -> JSONObject)? = null) {
     fun request(path: String, body: JSONObject? = null): JSONObject = bridge?.invoke(path, body) ?: JSONObject(String(bytes(path, body)))
     fun bytes(path: String, body: JSONObject? = null): ByteArray {
+        check(!Thread.currentThread().isInterrupted)
         require(path.startsWith("/api/") && !path.contains(".."))
         val connection = (network?.openConnection(URL(origin + path)) ?: URL(origin + path).openConnection()) as HttpURLConnection
         try {
@@ -26,6 +27,7 @@ class SentryApi(val origin: String, private val cookie: String, private val netw
                 val output = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(8192)
                 while (true) {
+                    check(!Thread.currentThread().isInterrupted)
                     val count = input.read(buffer)
                     if (count < 0) break
                     require(output.size() + count <= 1024 * 1024)
@@ -52,6 +54,7 @@ class SentryApi(val origin: String, private val cookie: String, private val netw
                 }.getOrNull()
                 if (local != null) return local
             }
+            check(!Thread.currentThread().isInterrupted)
             val store = TunnelStore(context)
             val credential = store.load() ?: return null
             return when (TunnelProbe.check(context, credential)) {
