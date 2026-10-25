@@ -18,6 +18,8 @@ The Direct build script signs with the existing companion key. The Play bundle r
 
 Refresh the bundled web snapshot using `tools/snapshot_galaxy_web.sh /path/to/openpilot`. `tools/capture_demo_fixtures.py` optionally refreshes the allowlisted fixtures over LAN and scrubs private values; review the resulting schemas and rerun the fixture tests before committing. The checked-in fixtures are synthetic and require no device capture.
 
-Integration verification uses StarPilot's companion host tests plus Galaxy/sentry tests with native Params in its Linux ARM64 Docker builder. `companion/sync.sh` accepts a local app repo path as its second argument for unpublished testing. Git subtree creates its sync merge commit; the script does not make an additional artifact commit.
+Distribution uses `./starpilot upstream-pr` from the private Android repository.
+It copies only a published Direct APK and its version into a StarPilot PR.
+Do not use whole-repository subtree imports: they can expose private Trail history.
 
 Release gates still outstanding: create/configure Firebase and deploy the relay; create the Play upload key; publish the privacy policy and declarations; verify upgrade over 1.1.30, Android 34–36 navigation/insets, route changes, background delivery and the airplane-mode demo on phones. No device deployment or Play upload is performed by the implementation work.

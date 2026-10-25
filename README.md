@@ -13,7 +13,7 @@ The Android companion for StarPilot. One shared codebase builds two editions:
 | --- | --- |
 | `Play-Distro` | Stable Play edition; repository default |
 | `Play-Dev` | Development destined for `Play-Distro` |
-| `Direct-Distro` | Stable Direct edition; the source StarPilot imports |
+| `Direct-Distro` | Stable Direct edition; the APK StarPilot distributes |
 | `Direct-Dev` | Development destined for `Direct-Distro` |
 
 Both editions remain in every branch as Gradle flavors. Branches decide when a
@@ -78,15 +78,16 @@ this command. First publish a Direct release; for example, for `direct-v1.2.1`:
 ```
 
 Replace the fork with your writable fork. The command downloads the published
-signed APK, verifies its SHA-256 against GitHub, and imports the exact tagged app
-source into a fresh sparse StarPilot checkout. It requires a newer version name
-and code than upstream currently ships. It pushes a new branch to your fork and
-opens a PR against `firestar5683/StarPilot:SecretGoodStarPilot`. It never pushes
-directly to upstream or merges a PR. Existing checkouts and devices are untouched.
+signed APK and verifies its SHA-256 against GitHub. The PR changes exactly two
+files: Galaxy's installer APK and its `.version` file. It requires a newer version
+than the installed release and a tag on Direct-Distro. Android source, Git history,
+Trail notes and agent settings stay in the private Android repository. Your GitHub
+login needs read access to that repo and write access to your StarPilot fork.
 
-The target must already include AppSplit's Android subtree. Until AppSplit merges,
-the default target stops with an explanation. To prepare an integration test
-against AppSplit without publishing anything:
+The command opens a PR against `firestar5683/StarPilot:SecretGoodStarPilot`.
+It never merges or pushes directly upstream. The target only needs the existing
+Galaxy installer and version file; AppSplit does not need to merge first.
+To prepare a local review without publishing anything:
 
 ```sh
 ./starpilot upstream-pr direct-v1.2.1 --fork dirwin31/openpilot \
