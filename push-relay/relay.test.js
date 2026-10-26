@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { handle, valid, fcmMessage, iosApps } from './relay.js'
-const body = { token: 'private-token', appId: 'link.firestar.galaxy', kind: 'warning', eventId: 'abc', wallTimeNs: 1000000000, label: 'Phone' }
+const body = { token: 'private-token', appId: 'com.starpilot.galaxy', kind: 'warning', eventId: 'abc', wallTimeNs: 1000000000, label: 'Phone' }
 function request(value = body) { return new Request('https://relay.test/v1/sentry', { method: 'POST', body: JSON.stringify(value) }) }
 function environment() {
   const values = new Map()

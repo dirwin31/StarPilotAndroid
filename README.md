@@ -4,7 +4,7 @@ The Android companion for StarPilot. One shared codebase builds two editions:
 
 | Edition | Application ID | Installation and updates |
 | --- | --- | --- |
-| Galaxy | `link.firestar.galaxy` | Google Play |
+| Galaxy | `com.starpilot.galaxy` | Google Play |
 | Galaxy Direct | `link.firestar.companion` | Signed APK from comma over local Wi-Fi/LAN |
 
 Android development lives in this private repository. Upstream StarPilot receives
