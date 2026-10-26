@@ -29,7 +29,7 @@ class MusicBond(
             Outcome.PAIRED -> "Paired with StarPilot. For music, choose StarPilot as this phone's media audio output."
             Outcome.ALREADY_PAIRED -> "Paired with StarPilot. Music was already set up on this phone."
             Outcome.UNSUPPORTED -> null
-            Outcome.FAILED -> "The app is paired, but music wasn't set up. Open Pair phone on StarPilot again (Settings > Bluetooth), then tap Add Bluetooth Phone Pairing here."
+            Outcome.FAILED -> "The app is paired, but music wasn't set up. Join StarPilot's Wi-Fi and tap Set up music only in the menu. You don't need to pair the app again."
         }
     }
 }

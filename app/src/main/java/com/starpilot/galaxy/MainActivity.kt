@@ -444,6 +444,8 @@ class MainActivity : Activity() {
             }
             .group("Bluetooth pairing") {
                 action("Add Bluetooth Phone Pairing", "First open Pair phone on StarPilot (Settings > Bluetooth), then tap here") { pairPhone() }
+                if (pairing.load() != null && pairing.musicAddress() == null && pairing.audioAddress() != null)
+                    action("Set up music only", "Keeps the app pairing. Join StarPilot's Wi-Fi, then tap here") { startMusicOnly() }
                 action("Forget pairing on this phone") {
                     pairing.forget(); ble?.close(); disconnected()
                     message("Pairing removed from this phone.\n\n$ALSO_FORGET_ON_COMMA")
@@ -886,6 +888,7 @@ class MainActivity : Activity() {
                     val claim = ClaimPairing.claim(transport, phoneName())
                     if (pairCancelled || generation != connectionGeneration.get()) return@Thread
                     pairing.save(claim.key, claim.id.ifEmpty { null })
+                    pairing.rememberAudio(claim.adapterAddress)
                     transport.close()
                     runOnUiThread { if (generation == connectionGeneration.get()) screen?.detail("Paired. Setting up music: tap Pair if your phone asks.") }
                     showPairProgress("Galaxy paired. Approve the Bluetooth music prompt on this phone if it asks.", 4)
@@ -1023,6 +1026,7 @@ class MainActivity : Activity() {
                     val claim = ClaimPairing.claim(transport, phoneName())
                     if (pairCancelled) return@Thread
                     pairing.save(claim.key, claim.id.ifEmpty { null })
+                    pairing.rememberAudio(claim.adapterAddress)
                     transport.close()
                     showPairProgress("Galaxy paired. Approve the Bluetooth music prompt on this phone if it asks.", 4)
                     val outcome = bondMusic(claim.adapterAddress)
@@ -1038,6 +1042,33 @@ class MainActivity : Activity() {
                 // Whatever happened, never leave the progress dialog up.
                 autoPairing.set(false); pairTransport = null; hidePairProgress()
             }
+        }.start()
+    }
+    /** Retries only the music bond; the app key from the earlier pairing stays untouched. */
+    private fun startMusicOnly() {
+        val permissions = bluetoothPermissions()
+        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) requestFeaturePermissions(permissions, 7, "Nearby devices") else runMusicOnly()
+    }
+    private fun runMusicOnly() {
+        val address = pairing.audioAddress() ?: return message("Pair the app with StarPilot first.")
+        val lan = Networks.commaLan(this) ?: return message("This phone isn't connected to StarPilot over Wi-Fi right now. Join StarPilot's Wi-Fi, then try again.")
+        if (!autoPairing.compareAndSet(false, true)) return
+        pairCancelled = false
+        showPairProgress("Opening StarPilot's pairing window over Wi-Fi…", 1)
+        Thread {
+            try {
+                LanPairing.openWindow(lan.first, lan.second)?.let { why ->
+                    hidePairProgress()
+                    if (!pairCancelled) runOnUiThread { message("Couldn't open StarPilot's pairing window over Wi-Fi ($why).") }
+                    return@Thread
+                }
+                if (pairCancelled) return@Thread
+                showPairProgress("Approve the Bluetooth music prompt on this phone if it asks.", 4)
+                val outcome = bondMusic(address)
+                if (outcome == MusicBond.Outcome.PAIRED || outcome == MusicBond.Outcome.ALREADY_PAIRED) pairing.rememberMusic(address)
+                hidePairProgress()
+                if (!pairCancelled) runOnUiThread { message(MusicBond.message(outcome) ?: "Music isn't supported by this StarPilot version.") }
+            } finally { autoPairing.set(false); hidePairProgress() }
         }.start()
     }
     private fun bondMusic(address: String): MusicBond.Outcome {
@@ -1197,6 +1228,10 @@ class MainActivity : Activity() {
         }
         if (code == 6) {
             if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) runAutoPair()
+            else permissionDenied(permissions, "Nearby devices")
+        }
+        if (code == 7) {
+            if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) runMusicOnly()
             else permissionDenied(permissions, "Nearby devices")
         }
         if (code == 4) {
