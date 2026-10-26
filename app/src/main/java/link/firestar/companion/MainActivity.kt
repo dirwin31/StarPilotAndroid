@@ -422,7 +422,7 @@ class MainActivity : Activity() {
             }
             .group("Phone GPS") {
                 if (PhoneGpsService.enabled(prefs)) action("Stop sharing phone GPS") { setPhoneGps(false) }
-                else action("Share phone GPS with comma", "Comma uses it for navigation when its own GPS has no fix") { setPhoneGps(true) }
+                else action("Share phone GPS with comma", "Choose Prefer phone GPS in Galaxy navigation to use it first") { setPhoneGps(true) }
             }
             .group("This app") {
                 action("Demo", "Explore Galaxy offline") { showDemo() }
@@ -980,7 +980,7 @@ class MainActivity : Activity() {
         if (missing.isNotEmpty()) { requestPermissions(missing.toTypedArray(), 4); return }
         prefs.edit().putBoolean("phoneGps", true).apply()
         startForegroundService(Intent(this, PhoneGpsService::class.java))
-        message("Sharing phone GPS. Keep this app's notification while driving; comma uses it only when its own GPS has no fix.")
+        message("Sharing phone GPS. Keep this app's notification while driving. Choose Prefer phone GPS in Galaxy navigation to use it first.")
     }
     private fun pairingNotice(text: String, paired: Boolean) {
         val s = screen ?: return message(text)

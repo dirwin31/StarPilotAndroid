@@ -64,25 +64,42 @@ class PhoneGpsService : Service(), LocationListener {
         if (stopped) return
         val location = latest ?: return update("Waiting for GPS")
         if (location.elapsedRealtimeNanos == sent) return
+        try {
+            sent = send()
+            update("Sharing GPS with comma")
+        } catch (_: Exception) { update("Waiting for comma or a fresh GPS fix") }
+    }
+    // Build from the newest measurement after waiting for a connection/transport lock.
+    private fun latestBody(): Pair<Long, ByteArray> {
+        check(!stopped)
+        val location = latest ?: error("Waiting for GPS")
         val age = (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000
         val payload = PhoneGps.payload(PhoneGps.Fix(location.latitude, location.longitude, location.accuracy, location.time,
             location.altitude.takeIf { location.hasAltitude() }, location.verticalAccuracyMeters.takeIf { location.hasVerticalAccuracy() },
             location.speed.takeIf { location.hasSpeed() }, location.speedAccuracyMetersPerSecond.takeIf { location.hasSpeedAccuracy() },
             location.bearing.takeIf { location.hasBearing() }, location.bearingAccuracyDegrees.takeIf { location.hasBearingAccuracy() }), age)
-            ?: return update("Waiting for GPS")
-        val body = JSONObject(payload).toString().toByteArray()
-        try {
-            send(body)
-            sent = location.elapsedRealtimeNanos
-            update("Sharing GPS with comma")
-        } catch (_: Exception) { update("Waiting for comma") }
+            ?: error("Waiting for fresh GPS")
+        return location.elapsedRealtimeNanos to JSONObject(payload).toString().toByteArray()
     }
-    private fun send(body: ByteArray) {
-        val ble = BleTransport.active?.takeIf { it.open } ?: Networks.wifi(this)?.let { wifi -> return post(wifi.first, body) } ?: bluetooth()
-            ?: throw IllegalStateException("comma unavailable")
-        val response = ble.request(JSONObject().put("method", "POST").put("path", PhoneGps.PATH)
-            .put("headers", JSONObject().put("content-type", "application/json")).put("body", Base64.getEncoder().encodeToString(body)))
-        require(response.getInt("status") == 200)
+    private fun send(): Long {
+        val ble = BleTransport.active?.takeIf { it.open }
+        if (ble == null) Networks.wifi(this)?.let { return post(it.first) }
+        try {
+            val transport = ble ?: bluetooth() ?: error("comma unavailable")
+            // request() uses the same monitor; no other request can queue between
+            // dating the latest fix and starting its Bluetooth transmission.
+            return synchronized(transport) {
+                val (stamp, body) = latestBody()
+                val response = transport.request(JSONObject().put("method", "POST").put("path", PhoneGps.PATH)
+                    .put("headers", JSONObject().put("content-type", "application/json")).put("body", Base64.getEncoder().encodeToString(body)))
+                require(response.getInt("status") == 200)
+                stamp
+            }
+        } catch (error: Exception) {
+            // A failed Bluetooth delivery must not block an available local link.
+            Networks.wifi(this)?.let { return post(it.first) }
+            throw error
+        }
     }
     /** Opens Bluetooth only when no other part of the app holds or is opening the connection. */
     private fun bluetooth(): BleTransport? {
@@ -96,7 +113,7 @@ class PhoneGpsService : Service(), LocationListener {
         val transport = BleTransport(this, key)
         return try { transport.connect(address); own = transport; transport } catch (_: Exception) { transport.close(); null }
     }
-    private fun post(network: android.net.Network, body: ByteArray) {
+    private fun post(network: android.net.Network): Long {
         for (attempt in 0..1) {
             if (cookie.isEmpty()) cookie = open(network, "/api/auth/session").run {
                 try { getHeaderField("Set-Cookie")?.substringBefore(';') ?: "" } finally { disconnect() }
@@ -105,8 +122,9 @@ class PhoneGpsService : Service(), LocationListener {
             try {
                 connection.requestMethod = "POST"; connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
+                val (stamp, body) = latestBody()
                 connection.outputStream.use { it.write(body) }
-                if (connection.responseCode == 200) return
+                if (connection.responseCode == 200) return stamp
                 if (connection.responseCode != 401) error("Galaxy rejected the location")
             } finally { connection.disconnect() }
             cookie = ""
