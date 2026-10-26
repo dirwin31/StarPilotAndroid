@@ -10,8 +10,8 @@ android {
         applicationId = "link.firestar.companion"
         minSdk = 26
         targetSdk = 36
-        versionCode = 33
-        versionName = "1.2.0"
+        versionCode = 34
+        versionName = "7.0.0.0"
     }
     signingConfigs {
         create("upload") {
@@ -32,7 +32,7 @@ android {
         create("direct") {
             dimension = "distribution"
             applicationId = "link.firestar.companion"
-            resValue("string", "app_name", "Galaxy Direct")
+            resValue("string", "app_name", "Galaxy")
             buildConfigField("String", "DISTRIBUTION", "\"direct\"")
             signingConfig = signingConfigs.getByName("companion")
         }

@@ -30,18 +30,18 @@ class LanPairingTest {
 
     @Test fun readsTheCodeFromCommasSpacedJson() {
         val pauses = mutableListOf<Long>()
-        assertEquals("comma answered HTTP 409 (busy)", LanPairing.openWindow(Api("c", 409, "{\"error\": \"x\", \"code\": \"busy\"}"), pause = { pauses += it }))
+        assertEquals("StarPilot answered HTTP 409 (busy)", LanPairing.openWindow(Api("c", 409, "{\"error\": \"x\", \"code\": \"busy\"}"), pause = { pauses += it }))
         assertEquals(3, pauses.size)
     }
 
     @Test fun givesUpAfterTheLastBusyAnswerAndNeverRetriesOtherRefusals() {
         val pauses = mutableListOf<Long>()
-        assertEquals("comma answered HTTP 409 (busy)", LanPairing.openWindow(Api("c", 409, "{\"code\":\"busy\"}"), pause = { pauses += it }))
+        assertEquals("StarPilot answered HTTP 409 (busy)", LanPairing.openWindow(Api("c", 409, "{\"code\":\"busy\"}"), pause = { pauses += it }))
         assertEquals(3, pauses.size)
         pauses.clear()
-        assertEquals("comma answered HTTP 503 (radio_unavailable)", LanPairing.openWindow(Api("c", 503, "{\"code\":\"radio_unavailable\"}"), pause = { pauses += it }))
+        assertEquals("StarPilot answered HTTP 503 (radio_unavailable)", LanPairing.openWindow(Api("c", 503, "{\"code\":\"radio_unavailable\"}"), pause = { pauses += it }))
         assertTrue(pauses.isEmpty())
-        assertEquals("comma gave this phone no local Galaxy session", LanPairing.openWindow(Api(null), pause = { pauses += it }))
+        assertEquals("StarPilot gave this phone no local Galaxy session", LanPairing.openWindow(Api(null), pause = { pauses += it }))
         assertTrue(pauses.isEmpty())
     }
 
@@ -77,10 +77,10 @@ class LanPairingTest {
 
     @Test fun saysWhyTheWindowCouldNotBeOpened() {
         val none = Api(null)
-        assertEquals("comma gave this phone no local Galaxy session", LanPairing.openWindow(none)); assertTrue(none.posts.isEmpty())
-        assertEquals("comma answered HTTP 409 (busy)", LanPairing.openWindow(Api("c", 409, "{\"error\":\"x\",\"code\":\"busy\"}")))
-        assertEquals("comma answered HTTP 503 (radio_unavailable)", LanPairing.openWindow(Api("c", 503, "{\"code\":\"radio_unavailable\"}")))
-        assertEquals("comma answered HTTP 403", LanPairing.openWindow(Api("c", 403, "{\"error\":\"Remote Galaxy request denied\"}")))
+        assertEquals("StarPilot gave this phone no local Galaxy session", LanPairing.openWindow(none)); assertTrue(none.posts.isEmpty())
+        assertEquals("StarPilot answered HTTP 409 (busy)", LanPairing.openWindow(Api("c", 409, "{\"error\":\"x\",\"code\":\"busy\"}")))
+        assertEquals("StarPilot answered HTTP 503 (radio_unavailable)", LanPairing.openWindow(Api("c", 503, "{\"code\":\"radio_unavailable\"}")))
+        assertEquals("StarPilot answered HTTP 403", LanPairing.openWindow(Api("c", 403, "{\"error\":\"Remote Galaxy request denied\"}")))
         assertEquals("offline", LanPairing.openWindow(Api("c", failSession = true)))
     }
 }

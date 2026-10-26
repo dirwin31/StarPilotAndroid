@@ -58,9 +58,24 @@ class DemoSession(private val activity: MainActivity, private val exit: () -> Un
     private fun response(type: String, data: ByteArray, status: Int = 200) = WebResourceResponse(type, "UTF-8", status, if (status == 200) "OK" else "Unavailable", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(data))
     fun show(route: String = "/") {
         val layout = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(7, 7, 18)) }
-        layout.setOnApplyWindowInsetsListener { view, insets -> view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom); insets }
-        layout.addView(Button(activity).apply { text = "Demo — not connected to a comma · Exit"; setOnClickListener { exit() } })
-        layout.addView(Button(activity).apply { text = "Explore app features"; setOnClickListener { options() } })
+        layout.setOnApplyWindowInsetsListener { view, insets ->
+            val bars = systemBarInsets(insets)
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+        layout.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL
+            val spacing = (16 * resources.displayMetrics.density).toInt()
+            setPadding(spacing, 0, spacing, 0)
+            addView(TextView(activity).apply {
+                setText(R.string.demo_title); textSize = 16f; setTextColor(Palette.ON); typeface = Palette.medium
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(TextView(activity).apply {
+                setText(R.string.exit_demo); textSize = 14f; setTextColor(Palette.VIOLET_SOFT)
+                contentDescription = activity.getString(R.string.exit_demo); isClickable = true; isFocusable = true
+                setPadding(spacing, 0, 0, 0); setOnClickListener { exit() }
+            })
+        }, LinearLayout.LayoutParams(-1, (52 * activity.resources.displayMetrics.density).toInt()))
         layout.addView(web, LinearLayout.LayoutParams(-1, 0, 1f)); activity.setContentView(layout)
         web.loadUrl(origin + "/#" + route)
     }
@@ -70,7 +85,7 @@ class DemoSession(private val activity: MainActivity, private val exit: () -> Un
     }
     private fun notification(id: Int, text: String) {
         if (!SentryPush.permitted(activity)) {
-            if (Build.VERSION.SDK_INT >= 33) activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
+            if (Build.VERSION.SDK_INT >= 33) activity.requestFeaturePermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10, "Notifications")
             return
         }
         manager.createNotificationChannel(NotificationChannel(Notifications.DEMO_CHANNEL, "Galaxy demo", NotificationManager.IMPORTANCE_DEFAULT))
@@ -80,14 +95,14 @@ class DemoSession(private val activity: MainActivity, private val exit: () -> Un
     }
     private fun enableUplink(on: Boolean) {
         if (!on) { uplink = false; manager.cancel(Notifications.DEMO_UPLINK); return }
-        disclosure("uplink", "Shares this phone's mobile data with your comma device over its Wi-Fi hotspot. Only your comma can connect, and a notification with Stop shows while it's active. Your carrier may count this as hotspot usage.") {
-            uplink = true; notification(Notifications.DEMO_UPLINK, "Sharing mobile data with comma (demo)")
+        disclosure("uplink", "Shares this phone's mobile data with your StarPilot device over its Wi-Fi hotspot. Only your StarPilot can connect, and a notification with Stop shows while it's active. Your carrier may count this as hotspot usage.") {
+            uplink = true; notification(Notifications.DEMO_UPLINK, "Sharing mobile data with StarPilot (demo)")
         }
     }
     private fun enableGps() {
-        disclosure("gps", "Galaxy sends this phone's location to your comma device to improve navigation while driving. Location is only used while the Phone GPS notification is showing.") {
+        disclosure("gps", "Galaxy sends this phone's location to your StarPilot device to improve navigation while driving. Location is only used while the Phone GPS notification is showing.") {
             if (activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
-                activity.requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 9)
+                activity.requestFeaturePermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 9, "Precise location")
             else gpsGranted()
         }
     }
@@ -100,7 +115,7 @@ class DemoSession(private val activity: MainActivity, private val exit: () -> Un
             manager.notify(Notifications.SENTRY_BASE + (id.hashCode() and 0x3FF), Notification.Builder(activity, Notifications.SENTRY_CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_dialog_alert).setContentTitle("Galaxy test alert").setContentText("Offline demo")
                 .setStyle(Notification.BigPictureStyle().bigPicture(bitmap)).setContentIntent(open).setAutoCancel(true).build())
-        } else if (Build.VERSION.SDK_INT >= 33) activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
+        } else if (Build.VERSION.SDK_INT >= 33) activity.requestFeaturePermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10, "Notifications")
     }
     private fun remoteKey() {
         val field = EditText(activity).apply { hint = "DEMO000000000000:" + "0".repeat(64) }
@@ -116,6 +131,8 @@ class DemoSession(private val activity: MainActivity, private val exit: () -> Un
             }.setNegativeButton("Close", null).show()
     }
     fun close() { runCatching { activity.unregisterReceiver(stop) }; manager.cancel(Notifications.DEMO_UPLINK); manager.cancel(Notifications.DEMO_GPS); web.removeJavascriptInterface("StarPilotApp"); web.stopLoading(); web.destroy() }
+    // WebView calls this class through the StarPilotApp JavaScript interface.
+    @Suppress("unused")
     inner class Bridge {
         @JavascriptInterface fun demo() = true
         @JavascriptInterface fun distribution() = BuildConfig.DISTRIBUTION

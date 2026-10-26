@@ -101,7 +101,7 @@ class UplinkService : Service() {
             val deny = response.getJSONArray("uploadDenyHosts")
             socks?.deniedHosts = (0 until deny.length()).map { deny.getString(it).lowercase() }.toSet()
             if (!response.getBoolean("enabled")) { reset(); update("Enable phone internet in Galaxy"); return }
-            update((if (response.optBoolean("active")) "Sharing mobile data with comma" else "Phone internet ready") + " · %.1f MB today".format(used / 1048576.0))
+            update((if (response.optBoolean("active")) "Sharing mobile data with StarPilot" else "Phone internet ready") + " · %.1f MB today".format(used / 1048576.0))
         } catch (_: Exception) {
             // Keep the SOCKS listener and credentials: the comma still routes to them until its lease expires.
             synchronized(sessionLock) { cookie = "" }

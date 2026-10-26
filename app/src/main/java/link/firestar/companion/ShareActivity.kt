@@ -17,7 +17,7 @@ class ShareActivity : Activity() {
     private var callback: ConnectivityManager.NetworkCallback? = null
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        setContentView(TextView(this).apply { text = "Opening destination in Galaxy…"; setPadding(40, 100, 40, 40) })
+        setContentView(TextView(this).apply { setText(R.string.opening_destination); setPadding(40, 100, 40, 40) })
         val text = (intent.getStringExtra(Intent.EXTRA_TEXT) ?: intent.dataString ?: "").take(8192)
         val short = Regex("https://(?:maps\\.app\\.goo\\.gl|goo\\.gl/maps)/[^\\s]+").find(text)?.value
         if (short == null) { complete(text); return }

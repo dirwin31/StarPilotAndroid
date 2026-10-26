@@ -74,12 +74,12 @@ class PhoneGpsService : Service(), LocationListener {
         try {
             send(body)
             sent = location.elapsedRealtimeNanos
-            update("Sharing GPS with comma")
-        } catch (_: Exception) { update("Waiting for comma") }
+            update("Sharing GPS with StarPilot")
+        } catch (_: Exception) { update("Waiting for StarPilot") }
     }
     private fun send(body: ByteArray) {
         val ble = BleTransport.active?.takeIf { it.open } ?: Networks.wifi(this)?.let { wifi -> return post(wifi.first, body) } ?: bluetooth()
-            ?: throw IllegalStateException("comma unavailable")
+            ?: throw IllegalStateException("StarPilot unavailable")
         val response = ble.request(JSONObject().put("method", "POST").put("path", PhoneGps.PATH)
             .put("headers", JSONObject().put("content-type", "application/json")).put("body", Base64.getEncoder().encodeToString(body)))
         require(response.getInt("status") == 200)
@@ -89,6 +89,7 @@ class PhoneGpsService : Service(), LocationListener {
         val now = SystemClock.elapsedRealtime()
         if (BleTransport.active != null || BleTransport.busy || now - lastBluetoothAttempt < 15_000) return null
         if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return null
+        if (getSystemService(android.bluetooth.BluetoothManager::class.java).adapter?.isEnabled != true) return null
         lastBluetoothAttempt = now
         val pairing = PairingStore(this)
         val key = pairing.load() ?: return null

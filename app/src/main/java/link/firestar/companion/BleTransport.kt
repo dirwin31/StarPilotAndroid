@@ -85,13 +85,13 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
     }
     private fun connectOnce(preferredAddress: String?): String {
         val device = try { linkUp(preferredAddress) } catch (e: GattDenied) {
-            throw PairingNotRecognized("comma has no paired phone matching this one")
+            throw PairingNotRecognized("StarPilot has no paired phone matching this one")
         }
         try {
             // Authenticate before exposing cached controls. Do not trust the advertised device name.
             val health = JSONObject().put("method", "GET").put("path", "/_bridge/health").apply { hello?.let { put("phone", it) } }
             val response = try { request(health, 20) } catch (e: ResponseTimeout) {
-                throw PairingNotRecognized("comma didn't recognize this phone's pairing")
+                throw PairingNotRecognized("StarPilot didn't recognize this phone's pairing")
             }
             if (response.getInt("status") != 200) throw IOException("Galaxy Bluetooth authentication failed")
             val previous = active
@@ -103,10 +103,10 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
     /** Scans, connects and reads the session challenge; nothing is authenticated yet. */
     private fun linkUp(preferredAddress: String?): BluetoothDevice {
         val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: throw IOException("Bluetooth is unavailable")
-        if (!adapter.isEnabled) throw IOException("Enable Bluetooth on your phone and comma")
+        if (!adapter.isEnabled) throw IOException("Enable Bluetooth on your phone and StarPilot")
         val remembered = preferredAddress?.let { runCatching { adapter.getRemoteDevice(it) }.getOrNull() }
         val device = remembered ?: run {
-            onPhase("Looking for comma over Bluetooth…")
+            onPhase("Looking for StarPilot over Bluetooth…")
             val scanner = adapter.bluetoothLeScanner ?: throw IOException("Bluetooth scanner unavailable")
             val found = LinkedBlockingQueue<BluetoothDevice>()
             val scan = object : ScanCallback() {
@@ -116,19 +116,19 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
             scanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(uuid("1"))).build()),
                 ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scan)
             try { found.poll(12, TimeUnit.SECONDS) } finally { scanner.stopScan(scan) }
-                ?: throw IOException("No Galaxy Bluetooth bridge found. Enable Bluetooth and install the bridge on comma.")
+                ?: throw IOException("No Galaxy Bluetooth bridge found. Enable Bluetooth and install the bridge on StarPilot.")
         }
         if (closed) throw IOException("Connection canceled")
         events.clear()
-        onPhase("Found comma. Connecting…")
+        onPhase("Found StarPilot. Connecting…")
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
         try {
             await("connect", if (remembered != null) 4 else 12)
-            onPhase("Checking comma’s Bluetooth service…")
+            onPhase("Checking StarPilot’s Bluetooth service…")
             if (gatt?.discoverServices() != true) throw IOException("Bluetooth discovery failed")
             await("services")
             if (gatt?.requestMtu(517) == true) packetSize = (ByteBuffer.wrap(await("mtu")).int - 3).coerceIn(20, 512)
-            onPhase("Reading comma’s secure pairing challenge…")
+            onPhase("Reading StarPilot’s secure pairing challenge…")
             val info = read("4")
             require(info.size == 17 && info[0].toInt() == 1)
             challenge = info.copyOfRange(1, 17)
@@ -142,12 +142,12 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
         connecting.incrementAndGet()
         try {
             try { linkUp(null) } catch (e: GattDenied) {
-                throw IOException("comma's pairing window isn't open. Open Pair phone on comma first (Settings > Bluetooth > Pair phone), then try again.")
+                throw IOException("StarPilot's pairing window isn't open. Open Pair phone on StarPilot first (Settings > Bluetooth > Pair phone), then try again.")
             }
-            onPhase("Pairing: sending this phone’s request to comma…")
+            onPhase("Pairing: sending this phone’s request to StarPilot…")
             val frame = ByteBuffer.allocate(4 + body.size).putInt(body.size).put(body).array()
             for (packet in BleWire.packets(frame, packetSize)) write(packet)
-            onPhase("Pairing: waiting for comma’s secure reply…")
+            onPhase("Pairing: waiting for StarPilot’s secure reply…")
             val assembler = BleWire.Assembler()
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
             while (System.nanoTime() < deadline) {
@@ -155,12 +155,12 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
                 if (packet.contentEquals(byteArrayOf(0))) { Thread.sleep(30); continue }
                 val result = assembler.add(packet)
                 if (result != null) {
-                    onPhase("Pairing: receiving comma’s secure reply…")
+                    onPhase("Pairing: receiving StarPilot’s secure reply…")
                     write(ByteBuffer.allocate(5).put(2).put(packet, 1, 4).array())
                     return challenge to result
                 }
             }
-            throw IOException("comma didn't answer. Open Pair phone on comma first (Settings > Bluetooth > Pair phone) and keep it open, then tap Add Bluetooth Phone Pairing again.")
+            throw IOException("StarPilot didn't answer. Open Pair phone on StarPilot first (Settings > Bluetooth > Pair phone) and keep it open, then tap Add Bluetooth Phone Pairing again.")
         } catch (e: Exception) { close(); throw e } finally { connecting.decrementAndGet() }
     }
     @Synchronized fun request(value: JSONObject, deadlineSeconds: Long = 90): JSONObject {

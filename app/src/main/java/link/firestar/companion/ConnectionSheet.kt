@@ -8,6 +8,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
@@ -28,13 +29,29 @@ class ConnectionSheet(private val activity: Activity, current: Transport) {
     private val dp = activity.resources.displayMetrics.density
     private fun px(value: Number) = (value.toFloat() * dp).roundToInt()
     private val dialog = Dialog(activity)
+    private val sheet: ScrollView
     private val content = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(px(20), px(22), px(20), px(20)) }
     private val tiles = mutableMapOf<Transport, LinearLayout>()
     private val summary = text(13f, Palette.MUTED)
     private var selected = current
 
     init {
-        content.addView(text(22f, Palette.ON, Palette.condensed).apply { text = "Connections" })
+        content.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(text(22f, Palette.ON, Palette.condensed).apply { setText(R.string.connections_title) },
+                LinearLayout.LayoutParams(0, -2, 1f))
+            addView(ImageView(activity).apply {
+                setImageResource(R.drawable.ic_chevron_down)
+                imageTintList = ColorStateList.valueOf(Palette.ON)
+                contentDescription = activity.getString(R.string.close_connections)
+                isClickable = true; isFocusable = true
+                setPadding(px(12), px(12), px(12), px(12))
+                background = RippleDrawable(ColorStateList.valueOf(Palette.alpha(Palette.VIOLET, 70)),
+                    GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Palette.alpha(Palette.VIOLET, 45)) }, null)
+                setOnClickListener { dismiss() }
+            }, LinearLayout.LayoutParams(px(44), px(44)))
+        })
         content.addView(LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             Transport.entries.forEachIndexed { index, transport ->
@@ -44,23 +61,63 @@ class ConnectionSheet(private val activity: Activity, current: Transport) {
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(16) })
         content.addView(summary, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(10) })
         content.setOnApplyWindowInsetsListener { view, insets ->
-            view.setPadding(px(20) + insets.systemWindowInsetLeft, px(22), px(20) + insets.systemWindowInsetRight, px(20) + insets.systemWindowInsetBottom)
+            val bars = systemBarInsets(insets)
+            view.setPadding(px(20) + bars.left, px(22), px(20) + bars.right, px(20) + bars.bottom)
             insets
         }
         paint()
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        dialog.setContentView(ScrollView(activity).apply {
+        sheet = object : ScrollView(activity) {
+            private var startRawY = 0f
+            private var dragging = false
+            private val touchSlop = android.view.ViewConfiguration.get(activity).scaledTouchSlop
+
+            override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startRawY = event.rawY
+                        dragging = false
+                    }
+                    MotionEvent.ACTION_MOVE -> if (scrollY == 0 && event.rawY - startRawY > touchSlop) {
+                        dragging = true
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        return true
+                    }
+                }
+                return super.onInterceptTouchEvent(event)
+            }
+
+            override fun performClick(): Boolean {
+                super.performClick()
+                dismiss()
+                return true
+            }
+
+            override fun onTouchEvent(event: MotionEvent): Boolean {
+                if (!dragging) return super.onTouchEvent(event)
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_MOVE -> translationY = (event.rawY - startRawY).coerceAtLeast(0f)
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val shouldDismiss = event.actionMasked == MotionEvent.ACTION_UP &&
+                            event.rawY - startRawY > px(72)
+                        dragging = false
+                        if (shouldDismiss) performClick() else animate().translationY(0f).setDuration(180).start()
+                    }
+                }
+                return true
+            }
+        }.apply {
             addView(content)
             background = GradientDrawable().apply {
                 val r = px(28).toFloat(); cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
                 setColor(Palette.SURFACE); setStroke(px(1), Palette.LINE)
             }
-        })
+        }
+        dialog.setContentView(sheet)
         dialog.window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             setGravity(Gravity.BOTTOM)
-            setWindowAnimations(android.R.style.Animation_InputMethod)
         }
     }
 
@@ -102,8 +159,20 @@ class ConnectionSheet(private val activity: Activity, current: Transport) {
         }
     }
 
-    fun show() { if (!activity.isFinishing && !activity.isDestroyed) dialog.show() }
-    private fun dismiss() { if (dialog.isShowing) dialog.dismiss() }
+    fun show() {
+        if (activity.isFinishing || activity.isDestroyed) return
+        dialog.show()
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        sheet.post {
+            sheet.translationY = sheet.height.toFloat()
+            sheet.animate().translationY(0f).setDuration(220).start()
+        }
+    }
+    private fun dismiss() {
+        if (!dialog.isShowing) return
+        sheet.animate().translationY(sheet.height.toFloat()).setDuration(180)
+            .withEndAction { if (dialog.isShowing) dialog.dismiss() }.start()
+    }
 
     private fun tile(transport: Transport) = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER

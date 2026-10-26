@@ -32,7 +32,7 @@ object AppUpdates {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.activeNotifications.firstOrNull { it.id == Notifications.PHONE_GPS && it.notification.extras.containsKey("availableVersion") }?.let { manager.cancel(it.id) }
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "App updates", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "A notification when your comma has a newer Galaxy Android app"
+            description = "A notification when your StarPilot has a newer Galaxy Android app"
         })
         // Remove an old update notification after that version has been installed.
         manager.activeNotifications.firstOrNull { it.id == NOTIFICATION }?.let {

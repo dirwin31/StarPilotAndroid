@@ -12,13 +12,13 @@ import android.widget.TextView
 
 class PairingProgressDialog(activity: Activity, cancel: () -> Unit) {
     private val dialog = AlertDialog.Builder(activity, R.style.AppDialog)
-        .setTitle("Pairing with comma")
+        .setTitle("Pairing with StarPilot")
         .setCancelable(false)
         .setNegativeButton("Cancel") { _, _ -> cancel() }
         .create()
     private val context = dialog.context
     private fun px(value: Int) = (value * context.resources.displayMetrics.density).toInt()
-    private val stages = listOf("Check comma", "Open pairing window", "Connect over Bluetooth", "Pair Galaxy", "Set up music")
+    private val stages = listOf("Check StarPilot", "Open pairing window", "Connect over Bluetooth", "Pair Galaxy", "Set up music")
     private val labels = stages.map { TextView(context).apply { textSize = 14f; setPadding(0, px(5), 0, px(5)) } }
     private val detail = TextView(context).apply {
         textSize = 15f
@@ -49,7 +49,7 @@ class PairingProgressDialog(activity: Activity, cancel: () -> Unit) {
     fun update(text: String, nextStage: Int? = null) {
         if (nextStage != null) stage = nextStage.coerceIn(stages.indices)
         labels.forEachIndexed { index, label ->
-            label.text = "${if (index < stage) "✓" else "${index + 1}."} ${stages[index]}"
+            label.text = context.getString(R.string.pairing_step_label, if (index < stage) "✓" else "${index + 1}.", stages[index])
             label.setTextColor(when { index < stage -> Palette.CYAN; index == stage -> Palette.VIOLET_SOFT; else -> Palette.MUTED })
         }
         detail.text = text

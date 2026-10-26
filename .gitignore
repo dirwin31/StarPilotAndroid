@@ -1,5 +1,9 @@
 .gradle/
 .kotlin/
+.idea/
 **/build/
 local.properties
+gradle/gradle-daemon-jvm.properties
 *.jks
+__pycache__/
+*.py[cod]

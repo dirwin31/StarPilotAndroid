@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="connections_title">Connections</string>
+    <string name="close_connections">Close connections</string>
+    <string name="permission_settings_note">Android manages these permissions. Turning an allowed permission off opens App settings. Phone GPS sharing and Sentry alerts are controlled separately.</string>
+    <string name="pairing_intro_again">StarPilot no longer recognizes this phone pairing. Pair again to restore Bluetooth Galaxy and music.</string>
+    <string name="pairing_intro_new">Pair this phone to use Galaxy without Wi-Fi and set up Bluetooth music.</string>
+    <string name="pairing_instructions">%1$s\n\n1. Keep StarPilot parked, stay connected over Wi-Fi, and turn on Bluetooth on both devices.\n\n2. Tap Add pairing. The app opens the StarPilot pairing window automatically.\n\n3. Allow Nearby devices if asked, then approve the Bluetooth pairing prompt on this phone. Confirm the code matches if one is shown.\n\n4. Wait for the app to confirm pairing is complete. If needed, choose StarPilot as your phone Bluetooth audio output.</string>
+    <string name="opening_destination">Opening destination in Galaxy…</string>
+    <string name="dont_ask_again">Don\'t ask again</string>
+    <string name="try_again">Try again</string>
+    <string name="demo_title">Galaxy demo · Offline</string>
+    <string name="exit_demo">Exit demo</string>
+    <string name="pairing_step_label">%1$s %2$s</string>
+</resources>

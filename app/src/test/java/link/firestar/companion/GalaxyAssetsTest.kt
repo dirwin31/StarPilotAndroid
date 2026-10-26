@@ -53,7 +53,7 @@ class GalaxyAssetsTest {
         val store = store(); val source = Source()
         store.check(source)
         store.check(source)
-        assertEquals("Galaxy matches comma.", store.status)
+        assertEquals("Galaxy matches StarPilot.", store.status)
         assertEquals(5, source.fileCalls)
         files["js/app.js"] = "const galaxy = 2".toByteArray()
         store.check(source)
@@ -80,10 +80,10 @@ class GalaxyAssetsTest {
         assertTrue(store.status.contains("verification failed"))
         source.corrupt = false; source.offline = true
         store.check(source)
-        assertTrue(store.status.contains("reach comma"))
+        assertTrue(store.status.contains("reach StarPilot"))
         source.offline = false; source.tooOld = true
         store.check(source)
-        assertTrue(store.status.startsWith("Comma’s software is too old"))
+        assertTrue(store.status.startsWith("StarPilot’s software is too old"))
         assertEquals(previous, store.readyRoot)
         assertEquals(listOf(previous!!.name), cache.list()!!.toList())
     }
