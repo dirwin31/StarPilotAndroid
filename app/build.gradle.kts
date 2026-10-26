@@ -4,7 +4,7 @@ val firebaseEnabled = file("google-services.json").exists()
 if (firebaseEnabled) apply(plugin = "com.google.gms.google-services")
 
 android {
-    namespace = "link.firestar.companion"
+    namespace = "com.starpilot.galaxy"
     compileSdk = 37
     defaultConfig {
         applicationId = "link.firestar.companion"
@@ -38,7 +38,7 @@ android {
         }
         create("play") {
             dimension = "distribution"
-            applicationId = "link.firestar.galaxy"
+            applicationId = "com.starpilot.galaxy"
             resValue("string", "app_name", "Galaxy")
             buildConfigField("String", "DISTRIBUTION", "\"play\"")
             if (System.getenv("COMPANION_UPLOAD_KEY_PASSWORD") != null) signingConfig = signingConfigs.getByName("upload")

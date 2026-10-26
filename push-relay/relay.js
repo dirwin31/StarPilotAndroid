@@ -1,4 +1,4 @@
-const androidApps = new Set(['link.firestar.companion', 'link.firestar.galaxy'])
+const androidApps = new Set(['link.firestar.companion', 'com.starpilot.galaxy'])
 const defaultIosApps = 'link.galaxy.bluetooth.natehuby76'
 export const iosApps = env => new Set(String(env?.IOS_APP_IDS ?? defaultIosApps).split(',').map(id => id.trim()).filter(Boolean))
 const kinds = new Set(['warning', 'alarm', 'test'])
