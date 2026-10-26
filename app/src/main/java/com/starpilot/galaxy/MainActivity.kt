@@ -26,6 +26,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.*
 import android.widget.*
@@ -367,6 +368,9 @@ class MainActivity : Activity() {
     private fun showWeb(view: WebView, route: Route, label: String, waitForPage: Boolean) {
         activeRoute = route
         routeDetails[route] = "Connected"
+        // A WebView must own focus or taps on its text fields never raise the keyboard.
+        view.isFocusable = true; view.isFocusableInTouchMode = true
+        view.setOnTouchListener { v, e -> if (e.action == MotionEvent.ACTION_DOWN && !v.hasFocus()) v.requestFocus(); false }
         view.setOnApplyWindowInsetsListener { v, insets ->
             val bars = systemBarInsets(insets)
             v.setPadding(bars.left, 0, bars.right, bars.bottom)
