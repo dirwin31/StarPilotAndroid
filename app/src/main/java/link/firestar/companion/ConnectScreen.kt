@@ -20,11 +20,11 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /** Connections in the order Automatic tries them. */
-enum class Route(val title: String, val icon: Int) {
-    GALAXY_WIFI("Galaxy Wi-Fi", R.drawable.ic_route_wifi),
-    HOME_NETWORK("Home network", R.drawable.ic_route_lan),
-    TUNNEL("Remote", R.drawable.ic_route_auto),
-    BLUETOOTH("Bluetooth", R.drawable.ic_route_bluetooth),
+enum class Route(val title: String, val icon: Int, val orbitTilt: Float, val orbitReach: Float, val orbitAnchor: Float) {
+    GALAXY_WIFI("Galaxy Wi-Fi", R.drawable.ic_route_wifi, -16f, 0.40f, 200f),
+    HOME_NETWORK("Home network", R.drawable.ic_route_lan, 8f, 0.58f, 330f),
+    TUNNEL("Remote", R.drawable.ic_route_auto, -5f, 0.77f, 105f),
+    BLUETOOTH("Bluetooth", R.drawable.ic_route_bluetooth, 14f, 0.96f, 255f),
 }
 
 enum class RouteState { IDLE, UNAVAILABLE, TRYING, FAILED, LIVE }
@@ -58,9 +58,6 @@ class OrbitView(context: Context) : View(context) {
     private val states = Array(Route.entries.size) { RouteState.IDLE }
     private val icons = Route.entries.map { context.getDrawable(it.icon)!!.mutate() }
     private val core = BitmapFactory.decodeResource(resources, R.drawable.galaxy)
-    private val tilt = floatArrayOf(-16f, 8f, -5f)
-    private val reach = floatArrayOf(0.40f, 0.68f, 0.96f)
-    private val anchor = floatArrayOf(200f, 330f, 105f)
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val corePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -95,10 +92,10 @@ class OrbitView(context: Context) : View(context) {
         }
     }
 
-    private fun radiusX(i: Int) = (width / 2f - 24 * dp) * reach[i]
+    private fun radiusX(i: Int) = (width / 2f - 24 * dp) * Route.entries[i].orbitReach
     private fun point(i: Int, degrees: Float): PointF {
         val rx = radiusX(i); val ry = rx * SQUASH
-        val a = Math.toRadians(degrees.toDouble()); val t = Math.toRadians(tilt[i].toDouble())
+        val a = Math.toRadians(degrees.toDouble()); val t = Math.toRadians(Route.entries[i].orbitTilt.toDouble())
         val x = rx * cos(a); val y = ry * sin(a)
         return PointF((width / 2f + x * cos(t) - y * sin(t)).toFloat(), (height / 2f + x * sin(t) + y * cos(t)).toFloat())
     }
@@ -113,7 +110,7 @@ class OrbitView(context: Context) : View(context) {
             else -> Palette.alpha(Palette.of(state), 130)
         }
         val rx = radiusX(i); val ry = rx * SQUASH; val cx = width / 2f; val cy = height / 2f
-        canvas.save(); canvas.rotate(tilt[i], cx, cy)
+        canvas.save(); canvas.rotate(Route.entries[i].orbitTilt, cx, cy)
         canvas.drawArc(RectF(cx - rx, cy - ry, cx + rx, cy + ry), 0f, sweep, false, stroke)
         canvas.restore()
         stroke.pathEffect = null
@@ -124,7 +121,7 @@ class OrbitView(context: Context) : View(context) {
         fill.shader = glow; canvas.drawCircle(cx, cy, 88 * dp, fill); fill.shader = null
         for (i in states.indices) orbit(canvas, i, 360f)
         for (i in states.indices) if (states[i] == RouteState.LIVE) {
-            val p = point(i, anchor[i]); stroke.color = Palette.alpha(Palette.CYAN, 170); stroke.strokeWidth = 1.5f * dp
+            val p = point(i, Route.entries[i].orbitAnchor); stroke.color = Palette.alpha(Palette.CYAN, 170); stroke.strokeWidth = 1.5f * dp
             canvas.drawLine(cx, cy, p.x, p.y, stroke)
         }
         canvas.drawCircle(cx, cy, coreRadius, corePaint)
@@ -134,7 +131,7 @@ class OrbitView(context: Context) : View(context) {
         for (i in states.indices) orbit(canvas, i, 180f)
         val animating = spin.isStarted
         for (i in states.indices) if (states[i] == RouteState.TRYING) {
-            val head = anchor[i] + (if (animating) phase else 0.86f) * 360f
+            val head = Route.entries[i].orbitAnchor + (if (animating) phase else 0.86f) * 360f
             for (k in 0 until 16) {
                 val p = point(i, head - k * 3.2f)
                 fill.color = Palette.alpha(Palette.VIOLET_SOFT, (235 * (1 - k / 16f)).roundToInt())
@@ -143,7 +140,7 @@ class OrbitView(context: Context) : View(context) {
         }
         val nodeRadius = 19 * dp; val iconHalf = (9 * dp).roundToInt()
         for (i in states.indices) {
-            val state = states[i]; val color = Palette.of(state); val p = point(i, anchor[i])
+            val state = states[i]; val color = Palette.of(state); val p = point(i, Route.entries[i].orbitAnchor)
             fill.color = Palette.SPACE; canvas.drawCircle(p.x, p.y, nodeRadius, fill)
             fill.color = Palette.alpha(color, if (state == RouteState.UNAVAILABLE) 14 else 38); canvas.drawCircle(p.x, p.y, nodeRadius, fill)
             stroke.strokeWidth = 1.5f * dp; stroke.color = Palette.alpha(color, if (state == RouteState.UNAVAILABLE) 70 else 255)
@@ -172,8 +169,6 @@ class ConnectScreen(private val activity: Activity, private val onRoute: (Route)
     private val footer = text(13f, Palette.MUTED)
     private val states = mutableMapOf<Route, RouteState>()
     private val rows = mutableMapOf<Route, Row>()
-    private val address = EditText(activity)
-    private val addressRow = LinearLayout(activity)
     val view: ScrollView
 
     private inner class Row(val route: Route) {
@@ -215,45 +210,27 @@ class ConnectScreen(private val activity: Activity, private val onRoute: (Route)
         panel.addView(list, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(22) })
 
         panel.addView(text(16f, Palette.SPACE, Palette.medium).apply {
-            text = "Try again"; gravity = Gravity.CENTER; isClickable = true; isFocusable = true
+            setText(R.string.try_again); gravity = Gravity.CENTER; isClickable = true; isFocusable = true
             background = RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), GradientDrawable().apply { cornerRadius = px(26).toFloat(); setColor(Palette.VIOLET) }, null)
             setOnClickListener { onRetry() }
         }, LinearLayout.LayoutParams(-1, px(52)).apply { topMargin = px(20) })
 
-        panel.addView(link("No comma? Explore the demo", onDemo), LinearLayout.LayoutParams(-1, -2))
+        panel.addView(link("No StarPilot? Explore the demo", onDemo), LinearLayout.LayoutParams(-1, -2))
         val links = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         links.addView(link("Wi-Fi settings", onWifiSettings), LinearLayout.LayoutParams(0, -2, 1f))
-        links.addView(link("Type an address") { toggleAddress() }, LinearLayout.LayoutParams(0, -2, 1f))
+        links.addView(link("Type an address") { showAddressDialog() }, LinearLayout.LayoutParams(0, -2, 1f))
         links.addView(link("More options", onOptions), LinearLayout.LayoutParams(0, -2, 1f))
         panel.addView(links, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(6) })
 
-        address.apply {
-            hint = "192.168.1.10"; setSingleLine(); textSize = 16f
-            setTextColor(Palette.ON); setHintTextColor(Palette.alpha(Palette.MUTED, 170))
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            imeOptions = EditorInfo.IME_ACTION_GO
-            contentDescription = "comma address on your network"
-            background = GradientDrawable().apply { cornerRadius = px(16).toFloat(); setColor(Palette.SURFACE); setStroke(px(1), Palette.LINE) }
-            setPadding(px(16), px(12), px(16), px(12))
-            setOnEditorActionListener { _, action, _ -> if (action == EditorInfo.IME_ACTION_GO) { open(); true } else false }
-        }
-        addressRow.apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE
-            addView(address, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(text(15f, Palette.SPACE, Palette.medium).apply {
-                text = "Open"; gravity = Gravity.CENTER; isClickable = true; isFocusable = true; setPadding(px(20), 0, px(20), 0)
-                background = RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), GradientDrawable().apply { cornerRadius = px(16).toFloat(); setColor(Palette.VIOLET) }, null)
-                setOnClickListener { open() }
-            }, LinearLayout.LayoutParams(-2, px(48)).apply { marginStart = px(10) })
-        }
-        panel.addView(addressRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(8) })
         panel.addView(footer, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(18) })
 
         view = ScrollView(activity).apply {
             isFillViewport = true; setBackgroundColor(Palette.SPACE); clipToPadding = false
             addView(panel)
             setOnApplyWindowInsetsListener { v, insets ->
-                v.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom); insets
+                val bars = systemBarInsets(insets)
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                insets
             }
         }
     }
@@ -269,17 +246,42 @@ class ConnectScreen(private val activity: Activity, private val onRoute: (Route)
         setOnClickListener { action() }
     }
 
-    private fun toggleAddress() {
-        val show = addressRow.visibility != View.VISIBLE
-        addressRow.visibility = if (show) View.VISIBLE else View.GONE
-        if (show) {
-            address.requestFocus()
-            activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.showSoftInput(address, 0)
-            view.post { view.smoothScrollTo(0, addressRow.bottom) }
+    private fun showAddressDialog() {
+        val field = EditText(activity).apply {
+            hint = "192.168.1.10"
+            setSingleLine()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_GO
+            contentDescription = "StarPilot address on your network"
         }
+        val spacing = px(24)
+        val container = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(spacing, px(8), spacing, 0)
+            addView(field, LinearLayout.LayoutParams(-1, -2))
+        }
+        val dialog = android.app.AlertDialog.Builder(activity)
+            .setTitle("StarPilot address")
+            .setMessage("Enter the private IP address shown on StarPilot's network.")
+            .setView(container)
+            .setPositiveButton("Connect", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+        fun submit() {
+            val error = onAddress(field.text.toString())
+            if (error == null) dialog.dismiss() else field.error = error
+        }
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener { submit() }
+            dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            field.requestFocus()
+            field.post { activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.showSoftInput(field, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
+        }
+        field.setOnEditorActionListener { _, action, _ ->
+            if (action == EditorInfo.IME_ACTION_GO) { submit(); true } else false
+        }
+        dialog.show()
     }
-
-    private fun open() { onAddress(address.text.toString())?.let { address.error = it } }
 
     fun headline(text: String) { headline.text = text }
     fun detail(text: String) { detail.text = text }
@@ -330,7 +332,7 @@ class ConnectScreen(private val activity: Activity, private val onRoute: (Route)
                     setSingleLine(); ellipsize = TextUtils.TruncateAt.END
                 }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = px(10) })
                 addView(TextView(activity).apply {
-                    text = "Connections"; textSize = 14f; setTextColor(Palette.VIOLET_SOFT); typeface = Palette.medium
+                    setText(R.string.connections_title); textSize = 14f; setTextColor(Palette.VIOLET_SOFT); typeface = Palette.medium
                     gravity = Gravity.CENTER; minHeight = px(48); setPadding(px(12), 0, px(12), 0)
                     isClickable = true; isFocusable = true
                     background = RippleDrawable(ColorStateList.valueOf(Palette.alpha(Palette.VIOLET, 60)), null, null)
@@ -342,7 +344,9 @@ class ConnectScreen(private val activity: Activity, private val onRoute: (Route)
                 addView(bar, LinearLayout.LayoutParams(-1, -2))
                 addView(View(activity).apply { setBackgroundColor(Palette.LINE) }, LinearLayout.LayoutParams(-1, px(1)))
                 setOnApplyWindowInsetsListener { v, insets ->
-                    v.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, 0); insets
+                    val bars = systemBarInsets(insets)
+                    v.setPadding(bars.left, bars.top, bars.right, 0)
+                    insets
                 }
             }
         }

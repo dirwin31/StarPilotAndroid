@@ -26,10 +26,10 @@ class MusicBond(
         private val ADDRESS = Regex("(?i)[0-9a-f]{2}(?::[0-9a-f]{2}){5}")
 
         fun message(outcome: Outcome): String? = when (outcome) {
-            Outcome.PAIRED -> "Paired with comma. For music, choose comma as this phone's media audio output."
-            Outcome.ALREADY_PAIRED -> "Paired with comma. Music was already set up on this phone."
+            Outcome.PAIRED -> "Paired with StarPilot. For music, choose StarPilot as this phone's media audio output."
+            Outcome.ALREADY_PAIRED -> "Paired with StarPilot. Music was already set up on this phone."
             Outcome.UNSUPPORTED -> null
-            Outcome.FAILED -> "The app is paired, but music wasn't set up. Open Pair phone on comma again (Settings > Bluetooth), then tap Add Bluetooth Phone Pairing here."
+            Outcome.FAILED -> "The app is paired, but music wasn't set up. Open Pair phone on StarPilot again (Settings > Bluetooth), then tap Add Bluetooth Phone Pairing here."
         }
     }
 }

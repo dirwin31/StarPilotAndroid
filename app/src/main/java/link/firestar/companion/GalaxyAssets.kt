@@ -85,7 +85,7 @@ class GalaxyAssetStore(private val cacheRoot: File, private val prefs: GalaxyPre
         // Validate saved assets before trusting a previous completed update.
         prefs.get(MANIFEST_KEY)?.takeIf { GalaxyAssetManifest.isHash(it) }?.let { hash ->
             val root = File(cacheRoot, hash)
-            if (verify(root)) { readyRoot = root; status = "Using Galaxy screens saved from comma." }
+            if (verify(root)) { readyRoot = root; status = "Using Galaxy screens saved from StarPilot." }
         }
     }
 
@@ -97,7 +97,7 @@ class GalaxyAssetStore(private val cacheRoot: File, private val prefs: GalaxyPre
 
     /** Compares comma's inventory with the saved copy and downloads only what changed. Never skips on an unchanged commit. */
     fun check(source: GalaxySource) {
-        status = "Checking comma for Galaxy updates…"
+        status = "Checking StarPilot for Galaxy updates…"
         var stage: File? = null
         val pool = Executors.newFixedThreadPool(4)
         try {
@@ -106,7 +106,7 @@ class GalaxyAssetStore(private val cacheRoot: File, private val prefs: GalaxyPre
             val data = manifest.encode().toByteArray()
             val hash = GalaxyAssetManifest.sha256(data)
             val saved = readyRoot
-            if (saved?.name == hash) { prefs.set(COMMIT_KEY, listing.commit ?: ""); status = "Galaxy matches comma."; return }
+            if (saved?.name == hash) { prefs.set(COMMIT_KEY, listing.commit ?: ""); status = "Galaxy matches StarPilot."; return }
             cacheRoot.mkdirs()
             val staging = File(cacheRoot, "staging-" + UUID.randomUUID()).also { stage = it; it.mkdirs() }
             var done = 0
@@ -142,17 +142,17 @@ class GalaxyAssetStore(private val cacheRoot: File, private val prefs: GalaxyPre
             stage?.deleteRecursively()
             val using = if (readyRoot == null) "No Galaxy screens are saved yet." else "Using your saved Galaxy screens."
             status = when (error) {
-                is GalaxyTooOldException -> "Comma’s software is too old to share Galaxy screens; update comma. $using"
+                is GalaxyTooOldException -> "StarPilot’s software is too old to share Galaxy screens; update StarPilot. $using"
                 is GalaxyUpdateException -> "${error.message} $using"
                 is InterruptedException -> "Galaxy update cancelled. $using"
-                is java.io.IOException -> "Couldn’t reach comma to check Galaxy updates. $using"
+                is java.io.IOException -> "Couldn’t reach StarPilot to check Galaxy updates. $using"
                 else -> "Galaxy update could not be read or saved. $using"
             }
         } finally { pool.shutdownNow() }
     }
 
     companion object {
-        const val NOT_DOWNLOADED = "Galaxy screens aren’t downloaded yet. Connect to comma over Wi-Fi once."
+        const val NOT_DOWNLOADED = "Galaxy screens aren’t downloaded yet. Connect to StarPilot over Wi-Fi once."
         const val MANIFEST_FILE = "manifest.txt"
         private const val MANIFEST_KEY = "galaxy.assets.manifest"
         private const val COMMIT_KEY = "galaxy.comma.commit"
@@ -208,7 +208,7 @@ object GalaxyUpdates {
     /** For the menu: refresh when the phone can reach comma over Wi-Fi/LAN, otherwise explain. */
     fun checkAsync(context: Context, done: (String) -> Unit) {
         val reach = Networks.commaLan(context)
-        if (reach == null) done("Join comma’s Wi-Fi or home network to refresh Galaxy screens.")
+        if (reach == null) done("Join StarPilot’s Wi-Fi or home network to refresh Galaxy screens.")
         else refreshAsync(context, reach.first, reach.second, done)
     }
 
@@ -233,7 +233,7 @@ object GalaxyUpdates {
                 connection.setRequestProperty("Accept-Encoding", "identity")
                 // Older comma builds answer 401 (no session) or 404 for the inventory path.
                 if (inventory && connection.responseCode in setOf(401, 404)) throw GalaxyTooOldException()
-                if (connection.responseCode != 200) throw GalaxyUpdateException("Comma returned HTTP ${connection.responseCode} for Galaxy screens.")
+                if (connection.responseCode != 200) throw GalaxyUpdateException("StarPilot returned HTTP ${connection.responseCode} for Galaxy screens.")
                 return connection.inputStream.use { read(it, limit) }
             } finally { connection.disconnect() }
         }

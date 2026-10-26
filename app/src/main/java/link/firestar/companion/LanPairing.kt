@@ -65,12 +65,12 @@ object LanPairing {
 
     private fun once(api: LanPairingApi): Pair<String?, Boolean> = try {
         val cookie = api.session()
-        if (cookie == null) "comma gave this phone no local Galaxy session" to false
+        if (cookie == null) "StarPilot gave this phone no local Galaxy session" to false
         else {
             val (status, body) = api.post(WINDOW_PATH, WINDOW_BODY, cookie)
             val code = Regex("\"code\"\\s*:\\s*\"([a-z_]+)\"").find(body)?.groupValues?.get(1)
             if (status == 200) null to false
-            else "comma answered HTTP $status${code?.let { " ($it)" }.orEmpty()}" to (status == 409 && code == "busy")
+            else "StarPilot answered HTTP $status${code?.let { " ($it)" }.orEmpty()}" to (status == 409 && code == "busy")
         }
     } catch (e: Exception) { (e.message ?: e.javaClass.simpleName) to false }
 

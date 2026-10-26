@@ -3,6 +3,10 @@ package link.firestar.companion
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.bluetooth.BluetoothManager
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.content.pm.PackageManager
 import java.net.HttpURLConnection
 import java.util.Base64
@@ -94,7 +98,7 @@ class MainActivity : Activity() {
         SentryPush.registerIfNeeded(this, current)
     }
     private fun enableSentry(on: Boolean): Boolean {
-        if (on && !SentryPush.permitted(this)) { runOnUiThread { requestNotificationPermission(8) }; return false }
+        if (on && !SentryPush.permitted(this)) { runOnUiThread { requestFeaturePermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 8, "Notifications") }; return false }
         return SentryPush.enable(this, on)
     }
     private var upgradePending = false
@@ -131,7 +135,7 @@ class MainActivity : Activity() {
         runCatching { cm.registerDefaultNetworkCallback(defaultWatcher, handler) }
         checkMusicBond()
         if (intent.data?.scheme == "starpilot-remote") { disconnected(); acceptRemoteKey(intent.data.toString()); return }
-        if (!requestNotificationPermission(7)) connect(Networks.localOrigin(intent.getStringExtra(AppDistribution.ORIGIN_EXTRA) ?: ""))
+        connect(Networks.localOrigin(intent.getStringExtra(AppDistribution.ORIGIN_EXTRA) ?: ""))
         if (PhoneGpsService.enabled(prefs) && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             startForegroundService(Intent(this, PhoneGpsService::class.java))
         }
@@ -169,7 +173,7 @@ class MainActivity : Activity() {
         val generation = supersedeConnection()
         val mode = prefs.getString("transport", "auto")
         if (host == null && mode == "remote") { connectTunnel(); return }
-        if (host == null && mode == "bluetooth") { connectBluetooth(); return }
+        if (host == null && mode == "bluetooth") { connectBluetooth(automatic = true); return }
         val hotspot = Networks.wifi(this)
         val wifi = hotspot ?: Networks.wifi(this, false)
         if (wifi == null) {
@@ -195,8 +199,8 @@ class MainActivity : Activity() {
         connectScreen().apply {
             refreshRoutes(this)
             headline("Opening Galaxy")
-            if (route == Route.GALAXY_WIFI) { route(route, RouteState.TRYING, "Opening…"); detail("Joined the comma's Wi-Fi.") }
-            else { route(route, RouteState.TRYING, "Opening ${address(origin)}…"); detail("Reaching comma on this Wi-Fi network.") }
+            if (route == Route.GALAXY_WIFI) { route(route, RouteState.TRYING, "Opening…"); detail("Joined StarPilot's Wi-Fi.") }
+            else { route(route, RouteState.TRYING, "Opening ${address(origin)}…"); detail("Reaching StarPilot on this Wi-Fi network.") }
         }
         val view = WebView(this)
         web = view
@@ -221,10 +225,10 @@ class MainActivity : Activity() {
                 if (web === v && request.isForMainFrame) runOnUiThread { pageFailed(v) }
             }
             // Reveal as soon as Galaxy starts drawing, so a slow asset never trips the watchdog.
-            override fun onPageCommitVisible(v: WebView, url: String) { if (web === v && Networks.localOrigin(url) == origin) revealWeb() }
+            override fun onPageCommitVisible(v: WebView, url: String) { if (web === v && Networks.localOrigin(url) == origin) { installVibrationBridge(v); revealWeb() } }
             override fun onPageFinished(v: WebView, url: String) {
                 if (web === v && Networks.localOrigin(url) == origin) {
-                    prefs.edit().putString("host", origin).apply(); share = null; revealWeb()
+                    prefs.edit().putString("host", origin).apply(); share = null; installVibrationBridge(v); revealWeb()
                     Distribution.checkAsync(this@MainActivity)
                     GalaxyUpdates.checkAsync(this@MainActivity) {}
                     connectedSentry()
@@ -252,8 +256,8 @@ class MainActivity : Activity() {
             refreshRoutes(this)
             headline("Checking Wi-Fi")
             route(route, RouteState.TRYING, "Checking…")
-            detail(if (route == Route.GALAXY_WIFI) "Waiting for Galaxy to answer on comma Wi-Fi."
-                else "Checking the last comma address before searching this network.")
+            detail(if (route == Route.GALAXY_WIFI) "Waiting for Galaxy to answer on StarPilot Wi-Fi."
+                else "Checking the last StarPilot address before searching this network.")
         }
         val cookie = CookieManager.getInstance().getCookie(candidate)
         Thread({
@@ -271,7 +275,7 @@ class MainActivity : Activity() {
                 else if (route == Route.HOME_NETWORK) discoverLan(automatic = automatic)
                 else if (!automatic || !fallbackFrom(Route.HOME_NETWORK)) disconnected().apply {
                     route(Route.GALAXY_WIFI, RouteState.FAILED, "Galaxy didn't answer")
-                    detail("This phone is on the comma's Wi-Fi, but Galaxy didn't answer.")
+                    detail("This phone is on StarPilot's Wi-Fi, but Galaxy didn't answer.")
                 }
             }
         }, "GalaxyProbe").start()
@@ -284,10 +288,10 @@ class MainActivity : Activity() {
         disconnected().apply {
             if (failed == Networks.ORIGIN) {
                 route(Route.GALAXY_WIFI, RouteState.FAILED, "Galaxy didn't open")
-                detail("This phone is on the comma's Wi-Fi, but Galaxy didn't answer. Check that Galaxy is turned on in comma settings.")
+                detail("This phone is on StarPilot's Wi-Fi, but Galaxy didn't answer. Check that Galaxy is turned on in StarPilot settings.")
             } else {
                 route(Route.HOME_NETWORK, RouteState.FAILED, "No answer at ${address(failed)}")
-                detail("comma didn't answer at ${address(failed)}. Its address may have changed, or comma is off this network.")
+                detail("StarPilot didn't answer at ${address(failed)}. Its address may have changed, or StarPilot is off this network.")
             }
         }
         fallbackFrom(Route.HOME_NETWORK)
@@ -296,8 +300,8 @@ class MainActivity : Activity() {
         supersedeConnection()
         screen = null
         return connectScreen().apply {
-            headline("Connect to comma")
-            detail("Join the comma's Galaxy Wi-Fi, or put this phone on the same Wi-Fi as comma. Galaxy opens as soon as you join.")
+            headline("Connect to StarPilot")
+            detail("Join StarPilot's Galaxy Wi-Fi, or put this phone on the same Wi-Fi as StarPilot. Galaxy opens as soon as you join.")
         }
     }
     /** The current connect screen, shown on its own; a new one if a page is showing. */
@@ -335,18 +339,18 @@ class MainActivity : Activity() {
     private fun tryRoute(route: Route) {
         when (route) {
             Route.GALAXY_WIFI -> if (Networks.wifi(this) != null) connect(Networks.ORIGIN) else {
-                supersedeConnection(); refreshRoutes(connectScreen()); joinWifi("Join the comma's Galaxy Wi-Fi, then come back")
+                supersedeConnection(); refreshRoutes(connectScreen()); joinWifi("Join StarPilot's Galaxy Wi-Fi, then come back")
             }
             Route.HOME_NETWORK -> {
                 val generation = supersedeConnection()
                 refreshRoutes(connectScreen())
                 val wifi = Networks.wifi(this, false)
                 val saved = Networks.localOrigin(prefs.getString("host", "") ?: "")?.takeIf { it != Networks.ORIGIN }
-                if (wifi == null) joinWifi("Join the same Wi-Fi as comma, then come back")
+                if (wifi == null) joinWifi("Join the same Wi-Fi as StarPilot, then come back")
                 else if (saved != null) probeWifi(wifi.first, saved, generation, automatic = false)
                 else discoverLan()
             }
-            Route.TUNNEL -> connectTunnel()
+            Route.TUNNEL -> connectTunnel(promptForKey = true)
             Route.BLUETOOTH -> if (pairing.load() != null && !pairing.stale()) connectBluetooth() else {
                 supersedeConnection(); refreshRoutes(connectScreen()); pairPhone()
             }
@@ -357,14 +361,16 @@ class MainActivity : Activity() {
         startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
     }
     private fun openTypedAddress(value: String): String? {
-        val host = Networks.localOrigin(Networks.typedAddress(value)) ?: return "Use comma's private IPv4 address, like 192.168.1.10"
+        val host = Networks.localOrigin(Networks.typedAddress(value)) ?: return "Use StarPilot's private IPv4 address, like 192.168.1.10"
         connect(host); return null
     }
     private fun showWeb(view: WebView, route: Route, label: String, waitForPage: Boolean) {
         activeRoute = route
         routeDetails[route] = "Connected"
         view.setOnApplyWindowInsetsListener { v, insets ->
-            v.setPadding(insets.systemWindowInsetLeft, 0, insets.systemWindowInsetRight, insets.systemWindowInsetBottom); insets
+            val bars = systemBarInsets(insets)
+            v.setPadding(bars.left, 0, bars.right, bars.bottom)
+            insets
         }
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Palette.SPACE) }
         panel.addView(ConnectScreen.webBar(this, route, label) { connections() })
@@ -374,6 +380,25 @@ class MainActivity : Activity() {
         // Keep the connect screen over the page until it has loaded, instead of a blank WebView.
         (overlay.view.parent as? ViewGroup)?.removeView(overlay.view)
         setContentView(FrameLayout(this).apply { addView(panel, -1, -1); addView(overlay.view, -1, -1) })
+    }
+    private fun installVibrationBridge(view: WebView) {
+        if (web !== view) return
+        view.evaluateJavascript("(function(){try{navigator.vibrate=function(pattern){try{StarPilotApp.vibrate(JSON.stringify(pattern));return true}catch(e){return false}}}catch(e){}})();", null)
+    }
+    private fun vibrateFromWeb(pattern: String) {
+        if (pattern.length > 128) return
+        val durations = runCatching {
+            if (pattern.startsWith("[")) {
+                val array = org.json.JSONArray(pattern)
+                if (array.length() !in 1..16) return
+                LongArray(array.length()) { array.optLong(it).coerceIn(0L, 1000L) }
+            } else longArrayOf(pattern.toLong().coerceIn(0L, 1000L))
+        }.getOrNull() ?: return
+        if (durations.sum() == 0L) return
+        val vibrator = if (Build.VERSION.SDK_INT >= 31) getSystemService(VibratorManager::class.java).defaultVibrator
+            else @Suppress("DEPRECATION") getSystemService(Vibrator::class.java)
+        if (durations.size == 1) vibrator.vibrate(VibrationEffect.createOneShot(durations[0], VibrationEffect.DEFAULT_AMPLITUDE))
+        else vibrator.vibrate(VibrationEffect.createWaveform(durations, -1))
     }
     private fun revealWeb() {
         clearWatchdog()
@@ -396,8 +421,8 @@ class MainActivity : Activity() {
         ConnectionSheet(this, Transport.of(prefs.getString("transport", "auto")))
             .onTransport { prefs.edit().putString("transport", it.key).apply(); connect() }
             .group("Home network") {
-                action("Find comma on this network", "Search this Wi-Fi for Galaxy") { discoverLan(fromMenu = true) }
-                action("Type comma's address", "For routers that block discovery") {
+                action("Find StarPilot on this network", "Search this Wi-Fi for Galaxy") { discoverLan(fromMenu = true) }
+                action("Type StarPilot's address", "For routers that block discovery") {
                     val field = EditText(this@MainActivity).apply { setText(prefs.getString("host", Networks.ORIGIN)); setSingleLine() }
                     AlertDialog.Builder(this@MainActivity).setTitle("Local Galaxy address").setView(field).setPositiveButton("Connect") { _, _ ->
                         val host = Networks.localOrigin(Networks.typedAddress(field.text.toString()))
@@ -409,12 +434,12 @@ class MainActivity : Activity() {
             }
             .group("Remote · firestar.link") {
                 action("Sign in with Galaxy ID", "Use your Galaxy ID and password") { signInRemote() }
-                action("Paste remote key", "Connect once on Wi-Fi, or add remote access") { addRemoteKey() }
+                action("Paste Galaxy app key", "Copy it from StarPilot → Galaxy → Access") { addRemoteKey() }
                 if (tunnel.load() != null) action("Forget remote key") { tunnel.clear(); if (activeRoute == Route.TUNNEL) connect() }
                 action("Details", "${Route.entries.joinToString("\n") { route -> route.title + ": " + (routeDetails[route] ?: "Not checked") }}\nKey present: ${tunnel.load() != null}, verified: ${tunnel.verified()}\n$routeError") {}
             }
             .group("Bluetooth pairing") {
-                action("Add Bluetooth Phone Pairing", "First open Pair phone on comma (Settings > Bluetooth), then tap here") { pairPhone() }
+                action("Add Bluetooth Phone Pairing", "First open Pair phone on StarPilot (Settings > Bluetooth), then tap here") { pairPhone() }
                 action("Forget pairing on this phone") {
                     pairing.forget(); ble?.close(); disconnected()
                     message("Pairing removed from this phone.\n\n$ALSO_FORGET_ON_COMMA")
@@ -422,35 +447,108 @@ class MainActivity : Activity() {
             }
             .group("Phone GPS") {
                 if (PhoneGpsService.enabled(prefs)) action("Stop sharing phone GPS") { setPhoneGps(false) }
-                else action("Share phone GPS with comma", "Comma uses it for navigation when its own GPS has no fix") { setPhoneGps(true) }
+                else action("Share phone GPS with StarPilot", "StarPilot uses it for navigation when its own GPS has no fix") { setPhoneGps(true) }
             }
-            .group("This app") {
-                action("Demo", "Explore Galaxy offline") { showDemo() }
-                action("Sentry alerts", if (prefs.getBoolean("sentryPushEnabled", false)) "Enabled" else "Disabled") { enableSentry(!prefs.getBoolean("sentryPushEnabled", false)) }
-                action("Notification details", "Registered: ${prefs.getString("fcmRegisteredOrigin", "")}\n${prefs.getString("fcmAcknowledgement", "")}\nLast push: ${prefs.getLong("sentryLastPushAt", 0)}\nLast poll: ${prefs.getLong("sentryLastPollAt", 0)}") {
+            .group("Permissions") {
+                action("Manage permissions", "Nearby devices, precise location, notifications") { showPermissions() }
+            }
+            .group("Debugging options") {
+                action("Notification details", "View push registration and delivery status") {
                     val token = prefs.getString("fcmToken", "").orEmpty()
-                    if (token.isNotEmpty()) AlertDialog.Builder(this@MainActivity).setTitle("Push token").setMessage(token).setPositiveButton("Copy") { _, _ ->
-                        getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Push token", token))
-                    }.setNegativeButton("Close", null).show()
+                    val details = "Registered: ${prefs.getString("fcmRegisteredOrigin", "")}\n${prefs.getString("fcmAcknowledgement", "")}\nLast push: ${prefs.getLong("sentryLastPushAt", 0)}\nLast poll: ${prefs.getLong("sentryLastPollAt", 0)}"
+                    AlertDialog.Builder(this@MainActivity).setTitle("Notification details").setMessage(details)
+                        .setPositiveButton("Close", null)
+                        .apply {
+                            if (token.isNotEmpty()) setNeutralButton("Copy push token") { _, _ ->
+                                getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Push token", token))
+                            }
+                        }.show()
                 }
-                action("Notification settings") { appNotificationSettings() }
                 action("Refresh Galaxy screens", GalaxyUpdates.store(this@MainActivity).status) {
                     GalaxyUpdates.checkAsync(this@MainActivity) { status -> runOnUiThread { message(status) } }
                 }
             }
             .show()
     }
-    private fun appNotificationSettings() {
-        if (!requestNotificationPermission(1)) startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+    private var permissionDialog: AlertDialog? = null
+    private val permissionSwitches = mutableMapOf<String, Switch>()
+    private fun appSettings() {
+        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
     }
-    private fun requestNotificationPermission(code: Int): Boolean {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
-            !prefs.getBoolean("notificationPermissionRequested", false)) {
-            prefs.edit().putBoolean("notificationPermissionRequested", true).apply()
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), code)
-            return true
+    private fun permissionSettings(name: String) {
+        AlertDialog.Builder(this).setTitle("Manage $name")
+            .setMessage("Open Galaxy in App settings, choose Permissions, then allow or turn off $name. Android may stop showing permission prompts after repeated denials.")
+            .setPositiveButton("Open App settings") { _, _ -> appSettings() }
+            .setNegativeButton("Cancel", null).show()
+    }
+    internal fun requestFeaturePermissions(permissions: Array<String>, code: Int, name: String) {
+        val missing = permissions.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) return
+        if (missing.any { prefs.getBoolean("asked:$it", false) && !shouldShowRequestPermissionRationale(it) }) {
+            permissionSettings(name); return
         }
-        return false
+        fun request() {
+            prefs.edit().apply { missing.forEach { putBoolean("asked:$it", true) } }.apply()
+            requestPermissions(missing.toTypedArray(), code)
+        }
+        if (missing.any { shouldShowRequestPermissionRationale(it) }) {
+            AlertDialog.Builder(this).setTitle("$name permission")
+                .setMessage("Galaxy needs $name for this feature. You can continue using other features without it.")
+                .setPositiveButton("Continue") { _, _ -> request() }.setNegativeButton("Cancel", null).show()
+        } else request()
+    }
+    private fun permissionDenied(permissions: Array<out String>, name: String) {
+        val missing = permissions.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) return
+        if (missing.any { !shouldShowRequestPermissionRationale(it) }) permissionSettings(name)
+        else AlertDialog.Builder(this).setTitle("$name wasn't allowed")
+            .setMessage("This feature needs $name. You can try again from Permissions in Connections.")
+            .setPositiveButton("OK", null).show()
+    }
+    private fun showPermissions() {
+        permissionDialog?.dismiss()
+        permissionSwitches.clear()
+        val padding = (20 * resources.displayMetrics.density).toInt()
+        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(padding, padding / 2, padding, padding / 2) }
+        val groups = listOf(
+            Triple("Nearby devices", if (Build.VERSION.SDK_INT >= 31) bluetoothPermissions() else emptyArray(), 21),
+            Triple("Precise location", arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 22),
+            Triple("Notifications", if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray(), 23),
+        )
+        groups.forEach { (name, permissions, code) ->
+            if (permissions.isEmpty()) return@forEach
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL; minimumHeight = padding * 3 }
+            val label = TextView(this).apply { text = name; textSize = 16f; setTextColor(Palette.ON) }
+            val toggle = Switch(this).apply {
+                isChecked = permissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+                contentDescription = "$name permission"
+                setOnClickListener {
+                    isChecked = permissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+                    if (isChecked) permissionSettings(name) else requestFeaturePermissions(permissions, code, name)
+                }
+            }
+            row.addView(label, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(toggle)
+            layout.addView(row)
+            permissionSwitches[name] = toggle
+        }
+        val note = TextView(this).apply {
+            setText(R.string.permission_settings_note)
+            setTextColor(Palette.MUTED); textSize = 13f
+        }
+        layout.addView(note)
+        permissionDialog = AlertDialog.Builder(this).setTitle("Permissions").setView(layout)
+            .setPositiveButton("Done", null).create().also { it.show() }
+    }
+    private fun refreshPermissions() {
+        val names = mapOf(
+            "Nearby devices" to if (Build.VERSION.SDK_INT >= 31) bluetoothPermissions() else emptyArray(),
+            "Precise location" to arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+            "Notifications" to if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray(),
+        )
+        permissionSwitches.forEach { (name, toggle) ->
+            toggle.isChecked = names[name].orEmpty().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+        }
     }
     private fun requestAppUpdate(requestedOrigin: String = origin) = Distribution.requestUpdate(this, requestedOrigin)
     private var discovery: LanDiscovery? = null
@@ -468,7 +566,7 @@ class MainActivity : Activity() {
         val next = RoutePlanner.next(after, prefs.getString("transport", "auto") ?: "auto", Networks.wifi(this, false) != null,
             internet, tunnel.load() != null, pairing.load() != null && !pairing.stale())
         when (next) {
-            Route.TUNNEL -> connectTunnel()
+            Route.TUNNEL -> connectTunnel(promptForKey = true)
             Route.BLUETOOTH -> connectBluetooth(automatic = true)
             else -> return false
         }
@@ -497,16 +595,23 @@ class MainActivity : Activity() {
                 val remote = if (!lanOk && current == Route.BLUETOOTH && credential != null) TunnelProbe.check(this, credential) else null
                 runOnUiThread {
                     if (generation != connectionGeneration.get() || prefs.getString("transport", "auto") != "auto") return@runOnUiThread
-                    if (lanOk) connect(lan!!.second)
+                    if (lanOk) connect(lan.second)
                     else if (remote == TunnelProbe.Result.REACHABLE) { supersedeConnection(); showTunnel(credential!!) }
                     else if (remote == TunnelProbe.Result.BAD_KEY) tunnel.clear()
                 }
             }.start()
         }, 2000)
     }
-    private fun connectTunnel() {
+    private fun connectTunnel(promptForKey: Boolean = false) {
         val credential = tunnel.load()
-        if (credential == null) { disconnected(); addRemoteKey(); return }
+        if (credential == null) {
+            disconnected().apply {
+                route(Route.TUNNEL, RouteState.UNAVAILABLE, "Remote access not set up")
+                detail("Sign in with your Galaxy ID, or paste the App key from StarPilot → Galaxy → Access.")
+            }
+            if (promptForKey) addRemoteKey()
+            return
+        }
         val generation = supersedeConnection()
         connectScreen().apply { route(Route.TUNNEL, RouteState.TRYING, "Checking firestar.link…"); headline("Opening Remote") }
         Thread {
@@ -515,7 +620,7 @@ class MainActivity : Activity() {
                 if (generation != connectionGeneration.get() || isDestroyed) return@runOnUiThread
                 if (result == TunnelProbe.Result.REACHABLE) showTunnel(credential)
                 else {
-                    routeError = if (result == TunnelProbe.Result.BAD_KEY) "Key didn't work. Check it in Galaxy → Access." else "Remote is unreachable"
+                    routeError = if (result == TunnelProbe.Result.BAD_KEY) "App key didn't work. Copy it again from StarPilot → Galaxy → Access." else "Remote is unreachable"
                     routeDetails[Route.TUNNEL] = routeError
                     if (result == TunnelProbe.Result.BAD_KEY) tunnel.clear()
                     if (!fallbackFrom(Route.TUNNEL)) disconnected().apply { route(Route.TUNNEL, RouteState.FAILED, routeError) }
@@ -524,29 +629,40 @@ class MainActivity : Activity() {
         }.start()
     }
     private fun addRemoteKey() {
-        val field = EditText(this).apply { setSingleLine(); hint = "slug:secret" }
-        AlertDialog.Builder(this).setTitle("Add remote key").setView(field)
-            .setPositiveButton("Connect") { _, _ -> acceptRemoteKey(field.text.toString()) }.setNegativeButton("Cancel", null).show()
+        val field = EditText(this).apply {
+            setSingleLine(); hint = "Paste Galaxy App key"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(this).apply { setPadding(padding, 0, padding, 0); addView(field, LinearLayout.LayoutParams(-1, -2)) }
+        AlertDialog.Builder(this).setTitle("Connect with Galaxy App key")
+            .setMessage("On StarPilot, open Galaxy → Access, copy the App key, and paste it here. Or choose Sign in with Galaxy ID in Connections.")
+            .setView(container).setPositiveButton("Connect") { _, _ -> acceptRemoteKey(field.text.toString()) }
+            .setNegativeButton("Cancel", null).show()
     }
     private fun acceptRemoteKey(raw: String) {
         val credential = TunnelCredential.parse(raw)
-        if (credential == null) { message("Key didn't work. Check it in Galaxy → Access."); return }
+        if (credential == null) { message("App key didn't work. Copy it again from StarPilot → Galaxy → Access."); return }
         val generation = connectionGeneration.get()
         Thread {
             val result = TunnelProbe.check(this, credential)
             runOnUiThread {
                 if (isDestroyed || generation != connectionGeneration.get()) return@runOnUiThread
                 if (result == TunnelProbe.Result.REACHABLE) { tunnel.save(credential); connectTunnel() }
-                else message(if (result == TunnelProbe.Result.BAD_KEY) "Key didn't work. Check it in Galaxy → Access." else "Remote is unreachable. Try again when comma and this phone have internet.")
+                else message(if (result == TunnelProbe.Result.BAD_KEY) "App key didn't work. Copy it again from StarPilot → Galaxy → Access." else "Remote is unreachable. Try again when StarPilot and this phone have internet.")
             }
         }.start()
     }
     private fun signInRemote() {
-        val field = EditText(this).apply { setSingleLine(); hint = "Galaxy ID or remote URL" }
-        AlertDialog.Builder(this).setTitle("Sign in with Galaxy ID").setView(field).setNegativeButton("Cancel", null)
+        val field = EditText(this).apply { setSingleLine(); hint = "Galaxy ID or remote link" }
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(this).apply { setPadding(padding, 0, padding, 0); addView(field, LinearLayout.LayoutParams(-1, -2)) }
+        AlertDialog.Builder(this).setTitle("Sign in to Galaxy")
+            .setMessage("Enter the Galaxy ID or paste the remote link shown on StarPilot → Galaxy → Access. You'll sign in at firestar.link.")
+            .setView(container).setNegativeButton("Cancel", null)
             .setPositiveButton("Continue") { _, _ ->
                 val slug = TunnelCredential.galaxyId(field.text.toString())
-                if (slug == null) message("Enter the 16-character Galaxy ID from your remote link.") else remoteLogin(slug)
+                if (slug == null) message("Enter the 16-character Galaxy ID or paste your Galaxy remote link.") else remoteLogin(slug)
             }.show()
     }
     private fun remoteLogin(slug: String) {
@@ -600,7 +716,7 @@ class MainActivity : Activity() {
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest) = !Networks.tunnelOrigin(request.url.toString(), credential.slug)
             override fun shouldInterceptRequest(v: WebView, request: WebResourceRequest): WebResourceResponse? =
                 if (Networks.tunnelOrigin(request.url.toString(), credential.slug)) null else WebResourceResponse("text/plain", "UTF-8", 403, "Denied", emptyMap(), ByteArrayInputStream(byteArrayOf()))
-            override fun onPageFinished(v: WebView, url: String) { if (web === v) { revealWeb(); connectedSentry() } }
+            override fun onPageFinished(v: WebView, url: String) { if (web === v && Networks.tunnelOrigin(url, credential.slug)) { installVibrationBridge(v); revealWeb(); connectedSentry() } }
             override fun onReceivedHttpError(v: WebView, request: WebResourceRequest, response: WebResourceResponse) {
                 if (request.isForMainFrame && response.statusCode in setOf(401, 403)) runOnUiThread {
                     if (web === v) { tunnel.clear(); if (!fallbackFrom(Route.TUNNEL)) disconnected() }
@@ -615,8 +731,11 @@ class MainActivity : Activity() {
             if (web === view) view.loadUrl(credential.webUrl + "#" + pageHash())
         }
     }
+    // WebView invokes these methods through the StarPilotApp JavaScript interface.
+    @Suppress("unused")
     inner class RemoteBridge {
         @JavascriptInterface fun bluetooth() = bluetoothMode
+        @JavascriptInterface fun vibrate(pattern: String) = vibrateFromWeb(pattern)
         @JavascriptInterface fun sentryPush() = SentryPush.state(this@MainActivity)
         @JavascriptInterface fun setSentryPush(on: Boolean) = enableSentry(on)
         @JavascriptInterface fun connectionOptions() { runOnUiThread { connections() } }
@@ -630,7 +749,7 @@ class MainActivity : Activity() {
     private fun discoverLan(automatic: Boolean = false, fromMenu: Boolean = false) {
         val wifi = Networks.wifi(this, false)
         if (wifi == null) {
-            val text = "Join the same Wi-Fi network as comma first."
+            val text = "Join the same Wi-Fi network as StarPilot first."
             screen?.route(Route.HOME_NETWORK, RouteState.UNAVAILABLE, "Not on Wi-Fi")
             if (automatic && fallbackFrom(Route.HOME_NETWORK)) return
             screen?.detail(text) ?: message(text)
@@ -655,18 +774,18 @@ class MainActivity : Activity() {
                 }
                 val s = screen
                 if (hosts.isEmpty()) {
-                    val text = error ?: "No comma answered on this Wi-Fi. Check that Galaxy is on and comma is on the same network. " +
-                        "A new install needs a few minutes parked with internet before comma can be found. " +
-                        "If your router blocks discovery, type comma's address instead."
-                    s?.route(Route.HOME_NETWORK, RouteState.FAILED, "No comma found")
+                    val text = error ?: "No StarPilot answered on this Wi-Fi. Check that Galaxy is on and StarPilot is on the same network. " +
+                        "A new install needs a few minutes parked with internet before StarPilot can be found. " +
+                        "If your router blocks discovery, type StarPilot's address instead."
+                    s?.route(Route.HOME_NETWORK, RouteState.FAILED, "No StarPilot found")
                     if (!(automatic && fallbackFrom(Route.HOME_NETWORK))) {
-                        if (s != null) { s.headline("Connect to comma"); s.detail(text) } else message(text)
+                        if (s != null) { s.headline("Connect to StarPilot"); s.detail(text) } else message(text)
                     }
                 } else if (hosts.size == 1 && !fromMenu) select(hosts.single())
                 else {
                     s?.route(Route.HOME_NETWORK, RouteState.LIVE, "${hosts.size} found")
-                    s?.headline("Choose your comma")
-                    val picker = AlertDialog.Builder(this).setTitle("Choose your comma on this trusted LAN")
+                    s?.headline("Choose your StarPilot")
+                    val picker = AlertDialog.Builder(this).setTitle("Choose your StarPilot on this trusted LAN")
                         .setItems(hosts.map(::address).toTypedArray()) { _, which -> if (generation == connectionGeneration.get()) select(hosts[which]) }
                         .setNegativeButton("Cancel") { _, _ -> cancel() }.setOnCancelListener { cancel() }.create()
                     picker.setOnDismissListener { if (lanPicker === picker) lanPicker = null }
@@ -677,18 +796,12 @@ class MainActivity : Activity() {
         discovery = search
         val s = screen
         if (s != null) {
-            s.headline("Finding your comma")
+            s.headline("Finding your StarPilot")
             s.route(Route.HOME_NETWORK, RouteState.TRYING, "Searching…")
-            s.detail(if (quickBluetoothFallback) "Checking this Wi-Fi for comma before trying Bluetooth."
-                else "Looking for comma on this Wi-Fi network. This takes up to 12 seconds.")
-        } else Toast.makeText(this, "Looking for comma on LAN…", Toast.LENGTH_LONG).show()
+            s.detail(if (quickBluetoothFallback) "Checking this Wi-Fi for StarPilot before trying Bluetooth."
+                else "Looking for StarPilot on this Wi-Fi network. This takes up to 12 seconds.")
+        } else Toast.makeText(this, "Looking for StarPilot on LAN…", Toast.LENGTH_LONG).show()
         search.start()
-    }
-    private fun savePairing(value: JSONObject) {
-        require(value.getString("type") == "galaxy-bluetooth" && value.getInt("version") == 1)
-        val hex = value.getString("key")
-        require(hex.matches(Regex("[0-9a-fA-F]{64}")))
-        pairing.save(hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray(), value.optString("id").ifEmpty { null })
     }
     /** How comma lists this phone under Settings → Bluetooth, e.g. "Danny's Pixel 8". */
     private fun phoneName(): String =
@@ -696,13 +809,13 @@ class MainActivity : Activity() {
             ?: "${Build.MANUFACTURER} ${Build.MODEL}").take(40)
     private fun phoneHello(): JSONObject = JSONObject().put("name", phoneName()).apply { pairing.previousId()?.let { put("replaces", it) } }
     /** One step for the app and music: comma's open pairing window gives this phone its key, then bonds it for music. */
-    private val ALSO_FORGET_ON_COMMA = "Also forget this phone on comma (Settings > Bluetooth, or Galaxy > Bluetooth), or comma keeps the old pairing and may fail to pair this phone again."
-    private val ALSO_FORGET_ON_PHONE = "Also forget comma in this phone's Bluetooth settings before pairing again, so the old Bluetooth bond doesn't get in the way."
-    private val PAIR_STEPS = "On comma open Settings > Bluetooth > Pair phone (or Galaxy > Bluetooth > Pair phone) and keep that screen open."
+    private val ALSO_FORGET_ON_COMMA = "Also forget this phone on StarPilot (Settings > Bluetooth, or Galaxy > Bluetooth), or StarPilot keeps the old pairing and may fail to pair this phone again."
+    private val ALSO_FORGET_ON_PHONE = "Also forget StarPilot in this phone's Bluetooth settings before pairing again, so the old Bluetooth bond doesn't get in the way."
+    private val PAIR_STEPS = "On StarPilot open Settings > Bluetooth > Pair phone (or Galaxy > Bluetooth > Pair phone) and keep that screen open."
     /** Without a Wi-Fi/LAN route the app cannot open comma's window itself, so say so before waiting for it. */
     private fun askToOpenWindow() {
         if (isFinishing || isDestroyed) return
-        AlertDialog.Builder(this).setTitle("Open Pair phone on comma first")
+        AlertDialog.Builder(this).setTitle("Open Pair phone on StarPilot first")
             .setMessage("$PAIR_STEPS\n\nComma's window stays open for 2 minutes. Tap Continue once it shows.")
             .setPositiveButton("Continue") { _, _ -> pairPhone(confirmed = true) }
             .setNegativeButton("Cancel", null).show()
@@ -711,17 +824,17 @@ class MainActivity : Activity() {
         if (pairProgress != null || autoPairing.get()) return
         val permissions = if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
             else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) { requestPermissions(permissions, 5); return }
+        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) { requestFeaturePermissions(permissions, 5, "Nearby devices"); return }
         if (!confirmed && Networks.commaLan(this) == null) { askToOpenWindow(); return }
         if (!autoPairing.compareAndSet(false, true)) return
         val generation = supersedeConnection()
         pairCancelled = false
-        showPairProgress("Checking that comma is ready to pair…", 0)
+        showPairProgress("Checking that StarPilot is ready to pair…", 0)
         connectScreen().apply {
             refreshRoutes(this)
-            headline("Pairing with comma")
+            headline("Pairing with StarPilot")
             route(Route.BLUETOOTH, RouteState.TRYING, "Pairing…")
-            detail("$PAIR_STEPS\nKeep Bluetooth on for comma and this phone.")
+            detail("$PAIR_STEPS\nKeep Bluetooth on for StarPilot and this phone.")
         }
         Thread {
             try {
@@ -733,26 +846,26 @@ class MainActivity : Activity() {
                     if (pairCancelled) return@Thread
                     notReady = LanPairing.waitUntilReady(network, origin) { text ->
                         showPairProgress(text, 0)
-                        runOnUiThread { if (generation == connectionGeneration.get()) screen?.detail("Waiting for comma's Bluetooth to be ready…\n$text") }
+                        runOnUiThread { if (generation == connectionGeneration.get()) screen?.detail("Waiting for StarPilot's Bluetooth to be ready…\n$text") }
                     }
                     if (notReady != null) return@let
                     if (pairCancelled) return@Thread
-                    showPairProgress("Opening comma’s pairing window over Wi-Fi…", 1)
+                    showPairProgress("Opening StarPilot’s pairing window over Wi-Fi…", 1)
                     val why = LanPairing.openWindow(network, origin)
                     if (why != null) {
-                        android.util.Log.w("GalaxyPair", "Could not open comma's window over Wi-Fi: $why")
-                        if (!pairCancelled) runOnUiThread { message("Couldn't open comma's pairing window over Wi-Fi ($why).\n\n$PAIR_STEPS Then try again.") }
+                        android.util.Log.w("GalaxyPair", "Could not open StarPilot's window over Wi-Fi: $why")
+                        if (!pairCancelled) runOnUiThread { message("Couldn't open StarPilot's pairing window over Wi-Fi ($why).\n\n$PAIR_STEPS Then try again.") }
                         return@Thread
                     }
-                    windowNote = "Opened comma's pairing window over Wi-Fi.\n"
+                    windowNote = "Opened StarPilot's pairing window over Wi-Fi.\n"
                     runOnUiThread { if (generation == connectionGeneration.get()) screen?.detail(windowNote.trim()) }
                 }
                 notReady?.let { blocked ->
                     hidePairProgress()
                     runOnUiThread {
                         if (generation == connectionGeneration.get()) {
-                            screen?.headline("Comma isn't ready to pair")
-                            pairingNotice("Comma isn't ready to pair yet: ${blocked.message}\nTry Add Bluetooth Phone Pairing again in a moment.", pairing.load() != null)
+                            screen?.headline("StarPilot isn't ready to pair")
+                            pairingNotice("StarPilot isn't ready to pair yet: ${blocked.message}\nTry Add Bluetooth Phone Pairing again in a moment.", pairing.load() != null)
                         }
                     }
                     return@Thread
@@ -787,7 +900,7 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         if (generation == connectionGeneration.get()) {
                             screen?.headline("Pairing didn't finish")
-                            pairingNotice("Couldn't pair: ${e.message ?: "comma didn't answer"}", pairing.load() != null)
+                            pairingNotice("Couldn't pair: ${e.message ?: "StarPilot didn't answer"}", pairing.load() != null)
                         } else android.util.Log.w("GalaxyPair", "Pairing result dropped: a newer connection attempt replaced it")
                     }
                 } finally {
@@ -806,7 +919,7 @@ class MainActivity : Activity() {
             val device = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(android.bluetooth.BluetoothDevice.EXTRA_DEVICE, android.bluetooth.BluetoothDevice::class.java)
                 else @Suppress("DEPRECATION") intent.getParcelableExtra(android.bluetooth.BluetoothDevice.EXTRA_DEVICE)
             val state = intent.getIntExtra(android.bluetooth.BluetoothDevice.EXTRA_BOND_STATE, -1)
-            if (CommaBond.forgotten(pairing.musicAddress(), device?.address, state)) commaBondEnded("You forgot comma in this phone's Bluetooth settings")
+            if (CommaBond.forgotten(pairing.musicAddress(), device?.address, state)) commaBondEnded("You forgot StarPilot in this phone's Bluetooth settings")
         }
     }
     private fun commaBondEnded(why: String) {
@@ -823,8 +936,8 @@ class MainActivity : Activity() {
     private fun checkMusicBond() {
         val address = pairing.musicAddress() ?: return
         if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
-        val bonded = runCatching { getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter?.bondedDevices?.map { it.address }?.toSet() }.getOrNull() ?: return
-        if (CommaBond.missing(address, bonded)) commaBondEnded("Comma is no longer in this phone's Bluetooth devices")
+        val bonded = runCatching { getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices?.map { it.address }?.toSet() }.getOrNull() ?: return
+        if (CommaBond.missing(address, bonded)) commaBondEnded("StarPilot is no longer in this phone's Bluetooth devices")
     }
     private val autoPairing = java.util.concurrent.atomic.AtomicBoolean()
     private var autoPairAsked = false
@@ -864,15 +977,10 @@ class MainActivity : Activity() {
         content.addView(TextView(themed).apply {
             textSize = 16f
             setTextColor(Palette.ON)
-            text = (if (again) "Comma no longer recognizes this phone's pairing. Pair again to restore Bluetooth Galaxy and music."
-                else "Pair this phone to use Galaxy without Wi-Fi and set up Bluetooth music.") +
-                "\n\n1. Keep comma parked, stay connected over Wi-Fi, and turn on Bluetooth on both devices." +
-                "\n\n2. Tap Add pairing. The app opens comma's pairing window automatically." +
-                "\n\n3. Allow Nearby devices if asked, then approve the Bluetooth pairing prompt on this phone. Confirm the code matches if one is shown." +
-                "\n\n4. Wait for the app to confirm pairing is complete. If needed, choose comma as your phone's Bluetooth audio output."
+            text = getString(R.string.pairing_instructions, getString(if (again) R.string.pairing_intro_again else R.string.pairing_intro_new))
         })
         content.addView(CheckBox(themed).apply {
-            text = "Don't ask again"
+            setText(R.string.dont_ask_again)
             setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("autoPair", !checked).apply() }
         })
         dialog.setView(ScrollView(themed).apply { addView(content) })
@@ -880,27 +988,27 @@ class MainActivity : Activity() {
     }
     private fun startAutoPair() {
         val permissions = bluetoothPermissions()
-        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) requestPermissions(permissions, 6) else runAutoPair()
+        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) requestFeaturePermissions(permissions, 6, "Nearby devices") else runAutoPair()
     }
     private fun runAutoPair() {
-        val lan = Networks.commaLan(this) ?: return message("This phone isn't connected to comma over Wi-Fi right now. Join comma's Wi-Fi, then tap Add Bluetooth Phone Pairing in the menu.")
+        val lan = Networks.commaLan(this) ?: return message("This phone isn't connected to StarPilot over Wi-Fi right now. Join StarPilot's Wi-Fi, then tap Add Bluetooth Phone Pairing in the menu.")
         if (!autoPairing.compareAndSet(false, true)) return
         pairCancelled = false
-        showPairProgress("Checking that comma is ready to pair…", 0)
+        showPairProgress("Checking that StarPilot is ready to pair…", 0)
         Thread {
             try {
-                LanPairing.waitUntilReady(lan.first, lan.second) { text -> showPairProgress("Waiting for comma's Bluetooth to be ready…\n$text") }?.let { blocked ->
-                    android.util.Log.w("GalaxyPair", "Comma not ready to pair: ${blocked.code}")
+                LanPairing.waitUntilReady(lan.first, lan.second) { text -> showPairProgress("Waiting for StarPilot's Bluetooth to be ready…\n$text") }?.let { blocked ->
+                    android.util.Log.w("GalaxyPair", "StarPilot not ready to pair: ${blocked.code}")
                     hidePairProgress()
-                    if (!pairCancelled) runOnUiThread { message("Comma isn't ready to pair yet: ${blocked.message}\n\nTry Add Bluetooth Phone Pairing in the menu in a moment.") }
+                    if (!pairCancelled) runOnUiThread { message("StarPilot isn't ready to pair yet: ${blocked.message}\n\nTry Add Bluetooth Phone Pairing in the menu in a moment.") }
                     return@Thread
                 }
                 if (pairCancelled) return@Thread
-                showPairProgress("Opening comma's pairing window over Wi-Fi…", 1)
+                showPairProgress("Opening StarPilot's pairing window over Wi-Fi…", 1)
                 LanPairing.openWindow(lan.first, lan.second)?.let { why ->
-                    android.util.Log.w("GalaxyPair", "Could not open comma's window over Wi-Fi: $why")
+                    android.util.Log.w("GalaxyPair", "Could not open StarPilot's window over Wi-Fi: $why")
                     hidePairProgress()
-                    if (!pairCancelled) runOnUiThread { message("Couldn't open comma's pairing window over Wi-Fi ($why).\n\n$PAIR_STEPS Then tap Add Bluetooth Phone Pairing in the menu.") }
+                    if (!pairCancelled) runOnUiThread { message("Couldn't open StarPilot's pairing window over Wi-Fi ($why).\n\n$PAIR_STEPS Then tap Add Bluetooth Phone Pairing in the menu.") }
                     return@Thread
                 }
                 if (pairCancelled) return@Thread
@@ -915,12 +1023,12 @@ class MainActivity : Activity() {
                     showPairProgress("Galaxy paired. Approve the Bluetooth music prompt on this phone if it asks.", 4)
                     val outcome = bondMusic(claim.adapterAddress)
                     if (outcome == MusicBond.Outcome.PAIRED || outcome == MusicBond.Outcome.ALREADY_PAIRED) pairing.rememberMusic(claim.adapterAddress)
-                    if (!pairCancelled) runOnUiThread { message(MusicBond.message(outcome) ?: "Paired with comma. Bluetooth Galaxy is ready.") }
+                    if (!pairCancelled) runOnUiThread { message(MusicBond.message(outcome) ?: "Paired with StarPilot. Bluetooth Galaxy is ready.") }
                 } catch (e: Exception) {
                     transport.close()
                     if (pairCancelled) return@Thread
                     android.util.Log.w("GalaxyPair", "Pairing failed", e)
-                    runOnUiThread { message("Couldn't pair: ${e.message ?: "comma didn't answer"}\n\n$PAIR_STEPS Then tap Add Bluetooth Phone Pairing in the menu.") }
+                    runOnUiThread { message("Couldn't pair: ${e.message ?: "StarPilot didn't answer"}\n\n$PAIR_STEPS Then tap Add Bluetooth Phone Pairing in the menu.") }
                 }
             } finally {
                 // Whatever happened, never leave the progress dialog up.
@@ -929,7 +1037,7 @@ class MainActivity : Activity() {
         }.start()
     }
     private fun bondMusic(address: String): MusicBond.Outcome {
-        val adapter = getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
+        val adapter = getSystemService(BluetoothManager::class.java)?.adapter
         if (adapter == null || !adapter.isEnabled) return MusicBond.Outcome.FAILED
         if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return MusicBond.Outcome.FAILED
         return try {
@@ -965,22 +1073,20 @@ class MainActivity : Activity() {
         }
     }
     /** Pairing results appear on the connect screen when it is showing, otherwise in a dialog over Galaxy. */
-    private fun phoneGpsPermissions(): Array<String> = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION) +
-        (if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT) else emptyArray()) +
-        (if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray())
+    private fun phoneGpsPermissions(): Array<String> = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
     private fun setPhoneGps(enabled: Boolean) {
         if (enabled && !prefs.getBoolean("gpsDisclosureAccepted", false)) {
-            AlertDialog.Builder(this).setTitle("Phone GPS").setMessage("Galaxy sends this phone's location to your comma device to improve navigation while driving. Location is only used while the Phone GPS notification is showing.")
+            AlertDialog.Builder(this).setTitle("Phone GPS").setMessage("Galaxy sends this phone's location to your StarPilot device to improve navigation while driving. Location is only used while the Phone GPS notification is showing.")
                 .setPositiveButton("Continue") { _, _ -> prefs.edit().putBoolean("gpsDisclosureAccepted", true).apply(); setPhoneGps(true) }
                 .setNegativeButton("Cancel", null).show()
             return
         }
         if (!enabled) { prefs.edit().putBoolean("phoneGps", false).apply(); stopService(Intent(this, PhoneGpsService::class.java)); return }
         val missing = phoneGpsPermissions().filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (missing.isNotEmpty()) { requestPermissions(missing.toTypedArray(), 4); return }
+        if (missing.isNotEmpty()) { requestFeaturePermissions(missing.toTypedArray(), 4, "Precise location"); return }
         prefs.edit().putBoolean("phoneGps", true).apply()
         startForegroundService(Intent(this, PhoneGpsService::class.java))
-        message("Sharing phone GPS. Keep this app's notification while driving; comma uses it only when its own GPS has no fix.")
+        message("Sharing phone GPS. Keep this app's notification while driving; StarPilot uses it only when its own GPS has no fix.")
     }
     private fun pairingNotice(text: String, paired: Boolean) {
         val s = screen ?: return message(text)
@@ -1002,7 +1108,7 @@ class MainActivity : Activity() {
             // Comma stopped recognizing this phone; retrying cannot fix that, so wait for a new pairing instead.
             disconnected().apply {
                 route(Route.BLUETOOTH, RouteState.FAILED, "Pairing expired")
-                detail("Comma no longer recognizes this phone (it was forgotten there). $ALSO_FORGET_ON_PHONE $PAIR_STEPS Then tap Add Bluetooth Phone Pairing here.")
+                detail("StarPilot no longer recognizes this phone (it was forgotten there). $ALSO_FORGET_ON_PHONE $PAIR_STEPS Then tap Add Bluetooth Phone Pairing here.")
             }
             return
         }
@@ -1016,12 +1122,29 @@ class MainActivity : Activity() {
         }
         val permissions = if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
             else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) { requestPermissions(permissions, 2); return }
+        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
+            if (automatic) disconnected().apply {
+                route(Route.BLUETOOTH, RouteState.UNAVAILABLE, "Needs permission")
+                detail("Tap Bluetooth on this screen to allow Nearby devices and connect.")
+            } else requestFeaturePermissions(permissions, 2, "Nearby devices")
+            return
+        }
+        if (getSystemService(BluetoothManager::class.java).adapter?.isEnabled != true) {
+            disconnected().apply {
+                route(Route.BLUETOOTH, RouteState.UNAVAILABLE, "Bluetooth is off")
+                detail("Turn on Bluetooth in phone settings, then try again.")
+            }
+            if (!automatic) AlertDialog.Builder(this).setTitle("Bluetooth is off")
+                .setMessage("Turn on Bluetooth in phone settings to connect to StarPilot.")
+                .setPositiveButton("Bluetooth settings") { _, _ -> startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+                .setNegativeButton("Cancel", null).show()
+            return
+        }
         connectScreen().apply {
             refreshRoutes(this)
             headline("Connecting over Bluetooth")
             route(Route.BLUETOOTH, RouteState.TRYING, "Connecting…")
-            detail("Keep Bluetooth on for comma and this phone. Bluetooth opens Galaxy controls; maps and video need Wi-Fi.")
+            detail("Keep Bluetooth on for StarPilot and this phone. Bluetooth opens Galaxy controls; maps and video need Wi-Fi.")
         }
         Thread {
             var transport = BleTransport(this, key, phoneHello())
@@ -1040,14 +1163,14 @@ class MainActivity : Activity() {
                 runOnUiThread { if (!isFinishing && generation == connectionGeneration.get()) showBluetooth(transport) else transport.close() }
             } catch (e: Exception) {
                 transport.close()
-                if (e is PairingNotRecognized) { pairing.markStale(); android.util.Log.w("GalaxyPair", "Pairing not recognized by comma: ${e.message}") }
+                if (e is PairingNotRecognized) { pairing.markStale(); android.util.Log.w("GalaxyPair", "Pairing not recognized by StarPilot: ${e.message}") }
                 runOnUiThread {
                     if (e is PairingNotRecognized && !isFinishing && generation == connectionGeneration.get()) disconnected().apply {
                         route(Route.BLUETOOTH, RouteState.FAILED, "Pairing expired")
-                        detail("Comma no longer recognizes this phone (${e.message}). $ALSO_FORGET_ON_PHONE $PAIR_STEPS Then tap Add Bluetooth Phone Pairing here.")
+                        detail("StarPilot no longer recognizes this phone (${e.message}). $ALSO_FORGET_ON_PHONE $PAIR_STEPS Then tap Add Bluetooth Phone Pairing here.")
                     } else if (!isFinishing && generation == connectionGeneration.get()) disconnected().apply {
                         route(Route.BLUETOOTH, RouteState.FAILED, "Didn't connect")
-                        detail("Bluetooth didn't connect: ${e.message ?: "comma didn't answer"}. Check that Bluetooth is on in comma settings and comma is nearby.")
+                        detail("Bluetooth didn't connect: ${e.message ?: "StarPilot didn't answer"}. Check that Bluetooth is on in StarPilot settings and StarPilot is nearby.")
                     }
                 }
             }
@@ -1056,27 +1179,46 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code, permissions, results)
         if (demoSession != null) {
-            if (code == 9 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) demoSession?.gpsGranted()
+            if (code == 9) {
+                if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) demoSession?.gpsGranted()
+                else permissionDenied(permissions, "Precise location")
+            }
+            if (code == 10 && results.firstOrNull() != PackageManager.PERMISSION_GRANTED) permissionDenied(permissions, "Notifications")
             return
         }
-        if ((code == 1 || code == 7) && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) Distribution.checkAsync(this)
-        if (code == 7) connect(Networks.localOrigin(intent.getStringExtra(AppDistribution.ORIGIN_EXTRA) ?: ""))
-        if (code == 5 && results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) pairPhone()
+        if (code == 1 && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) Distribution.checkAsync(this)
+        if (code == 5) {
+            if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) pairPhone()
+            else permissionDenied(permissions, "Nearby devices")
+        }
         if (code == 6) {
             if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) runAutoPair()
-            else message("Pairing needs the Nearby devices permission. Allow it, then tap Add Bluetooth Phone Pairing in the menu.")
+            else permissionDenied(permissions, "Nearby devices")
         }
         if (code == 4) {
             if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                 prefs.edit().putBoolean("phoneGps", true).apply()
                 startForegroundService(Intent(this, PhoneGpsService::class.java))
-            } else message("Allow precise location to share phone GPS with comma.")
+                if (screen != null) screen?.detail("Sharing phone GPS. Keep the notification active while driving.")
+                else message("Sharing phone GPS. Keep the notification active while driving.")
+            } else permissionDenied(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), "Precise location")
         }
         if (code == 2) { if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) connectBluetooth(bluetoothAttemptAutomatic)
-            else disconnected().apply {
-                route(Route.BLUETOOTH, RouteState.FAILED, "Needs permission")
-                detail("Allow Nearby devices to connect over Bluetooth. Wi-Fi and LAN still work without it.")
+            else {
+                disconnected().apply {
+                    route(Route.BLUETOOTH, RouteState.FAILED, "Needs permission")
+                    detail("Allow Nearby devices to connect over Bluetooth. Wi-Fi and LAN still work without it.")
+                }
+                permissionDenied(permissions, "Nearby devices")
             } }
+        if (code == 1 || code == 8) {
+            if (results.firstOrNull() == PackageManager.PERMISSION_GRANTED && code == 8) enableSentry(true)
+            else if (results.firstOrNull() != PackageManager.PERMISSION_GRANTED) permissionDenied(permissions, "Notifications")
+        }
+        if (code in 21..23 && results.any { it != PackageManager.PERMISSION_GRANTED }) {
+            permissionDenied(permissions, when (code) { 21 -> "Nearby devices"; 22 -> "Precise location"; else -> "Notifications" })
+        }
+        refreshPermissions()
     }
     private fun showBluetooth(transport: BleTransport) {
         bluetoothMode = true
@@ -1141,6 +1283,7 @@ class MainActivity : Activity() {
             override fun onPageFinished(v: WebView, url: String) {
                 if (web !== v) return
                 share = null
+                installVibrationBridge(v)
                 connectedSentry(transport)
                 if (tunnel.load() == null) try { worker.execute { runCatching {
                     val reply = transport.request(JSONObject().put("method", "GET").put("path", "/api/galaxy/session").put("headers", JSONObject()).put("body", ""))
@@ -1152,11 +1295,13 @@ class MainActivity : Activity() {
         try { worker.execute { runCatching {
             val reply = transport.request(JSONObject().put("method", "GET").put("path", "/api/software/status?history=0").put("headers", JSONObject()).put("body", ""))
             if (reply.optInt("status") == 200 && GalaxyUpdates.olderThanComma(this, JSONObject(String(Base64.getDecoder().decode(reply.optString("body")))))) {
-                runOnUiThread { if (web === view) Toast.makeText(this, "Galaxy screens are from an older comma build. Connect over Wi-Fi to refresh.", Toast.LENGTH_LONG).show() }
+                runOnUiThread { if (web === view) Toast.makeText(this, "Galaxy screens are from an older StarPilot build. Connect over Wi-Fi to refresh.", Toast.LENGTH_LONG).show() }
             }
         } } } catch (_: RejectedExecutionException) {}
         view.loadUrl(if (share != null) "$origin/?share=${Uri.encode(share)}#/navigation" else "$origin/#${pageHash()}")
     }
+    // WebView invokes these methods through the StarPilotApp JavaScript interface.
+    @Suppress("unused")
     inner class Bridge {
         @JavascriptInterface fun sentryPush() = SentryPush.state(this@MainActivity)
         @JavascriptInterface fun setSentryPush(on: Boolean) = enableSentry(on)
@@ -1164,6 +1309,7 @@ class MainActivity : Activity() {
         @JavascriptInterface fun addRemoteKey() = RemoteBridge().addRemoteKey()
         @JavascriptInterface fun demo() = false
         @JavascriptInterface fun bluetooth() = bluetoothMode
+        @JavascriptInterface fun vibrate(pattern: String) = vibrateFromWeb(pattern)
         @JavascriptInterface fun connectionOptions() { runOnUiThread { connections() } }
         @JavascriptInterface fun distribution() = BuildConfig.DISTRIBUTION
         @JavascriptInterface fun version() = BuildConfig.VERSION_NAME
@@ -1177,7 +1323,7 @@ class MainActivity : Activity() {
                 var dialog: AlertDialog? = null
                 runOnUiThread {
                     if (isFinishing || isDestroyed) { answer.countDown(); return@runOnUiThread }
-                    dialog = AlertDialog.Builder(this@MainActivity).setTitle("Phone internet").setMessage("Shares this phone's mobile data with your comma device over its Wi-Fi hotspot. Only your comma can connect, and a notification with Stop shows while it's active. Your carrier may count this as hotspot usage.")
+                    dialog = AlertDialog.Builder(this@MainActivity).setTitle("Phone internet").setMessage("Shares this phone's mobile data with your StarPilot device over its Wi-Fi hotspot. Only your StarPilot can connect, and a notification with Stop shows while it's active. Your carrier may count this as hotspot usage.")
                         .setPositiveButton("Continue") { _, _ -> prefs.edit().putBoolean("uplinkDisclosureAccepted", true).apply(); accepted.set(true) }
                         .setNegativeButton("Cancel", null).setOnDismissListener { answer.countDown() }.show()
                 }
@@ -1206,6 +1352,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume(); resumed = true; if (demoSession != null) return; recovery.resumed(); GalaxyUpdates.checkAsync(this) {}; Distribution.checkAsync(this); checkMusicBond()
         Distribution.resume(this)
+        refreshPermissions()
     }
     override fun onPause() { resumed = false; super.onPause() }
     override fun onStop() {

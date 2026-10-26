@@ -73,7 +73,7 @@ class LanDiscovery(context: Context, private val network: Network, private val t
         val resolver = object : NsdManager.ResolveListener {
             override fun onResolveFailed(service: NsdServiceInfo, code: Int) { handler.post {
                 if (active && resolving === this) {
-                    lastError = "Comma was advertised, but its LAN address could not be resolved (Android error $code)."
+                    lastError = "StarPilot was advertised, but its LAN address could not be resolved (Android error $code)."
                     Log.w("GalaxyLAN", "Resolve failed: $code")
                     resolving = null; resolveNext()
                 }
@@ -92,7 +92,7 @@ class LanDiscovery(context: Context, private val network: Network, private val t
         try { nsd.resolveService(info, resolver) }
         catch (error: RuntimeException) {
             Log.w("GalaxyLAN", "Resolve failed", error)
-            lastError = "Comma was advertised, but Android could not resolve its LAN address."
+            lastError = "StarPilot was advertised, but Android could not resolve its LAN address."
             resolving = null; resolveNext(); settleIfReady()
         }
     }
