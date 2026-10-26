@@ -445,7 +445,7 @@ class MainActivity : Activity() {
             .group("Bluetooth pairing") {
                 action("Add Bluetooth Phone Pairing", "First open Pair phone on StarPilot (Settings > Bluetooth), then tap here") { pairPhone() }
                 if (pairing.load() != null && pairing.musicAddress() == null && pairing.audioAddress() != null)
-                    action("Set up music only", "Keeps the app pairing. Join StarPilot's Wi-Fi, then tap here") { startMusicOnly() }
+                    action("Set up music only", "Keeps the app pairing. Join StarPilot's Wi-Fi (or open Pair phone on StarPilot), then tap here") { startMusicOnly() }
                 action("Forget pairing on this phone") {
                     pairing.forget(); ble?.close(); disconnected()
                     message("Pairing removed from this phone.\n\n$ALSO_FORGET_ON_COMMA")
@@ -890,15 +890,12 @@ class MainActivity : Activity() {
                     pairing.save(claim.key, claim.id.ifEmpty { null })
                     pairing.rememberAudio(claim.adapterAddress)
                     transport.close()
-                    runOnUiThread { if (generation == connectionGeneration.get()) screen?.detail("Paired. Setting up music: tap Pair if your phone asks.") }
-                    showPairProgress("Galaxy paired. Approve the Bluetooth music prompt on this phone if it asks.", 4)
-                    val outcome = bondMusic(claim.adapterAddress)
-                    if (outcome == MusicBond.Outcome.PAIRED || outcome == MusicBond.Outcome.ALREADY_PAIRED) pairing.rememberMusic(claim.adapterAddress)
+                    hidePairProgress()
                     if (pairCancelled || generation != connectionGeneration.get()) return@Thread
                     runOnUiThread {
                         if (generation != connectionGeneration.get()) return@runOnUiThread
-                        MusicBond.message(outcome)?.let { message(it) }
                         connectBluetooth()
+                        offerMusic("Paired with StarPilot.")
                     }
                 } catch (e: Exception) {
                     transport.close()
@@ -1028,10 +1025,8 @@ class MainActivity : Activity() {
                     pairing.save(claim.key, claim.id.ifEmpty { null })
                     pairing.rememberAudio(claim.adapterAddress)
                     transport.close()
-                    showPairProgress("Galaxy paired. Approve the Bluetooth music prompt on this phone if it asks.", 4)
-                    val outcome = bondMusic(claim.adapterAddress)
-                    if (outcome == MusicBond.Outcome.PAIRED || outcome == MusicBond.Outcome.ALREADY_PAIRED) pairing.rememberMusic(claim.adapterAddress)
-                    if (!pairCancelled) runOnUiThread { message(MusicBond.message(outcome) ?: "Paired with StarPilot. Bluetooth Galaxy is ready.") }
+                    hidePairProgress()
+                    if (!pairCancelled) runOnUiThread { offerMusic("Paired with StarPilot.") }
                 } catch (e: Exception) {
                     transport.close()
                     if (pairCancelled) return@Thread
@@ -1044,6 +1039,16 @@ class MainActivity : Activity() {
             }
         }.start()
     }
+    /** Music is its own step: the app pairing is already saved, so "Later" loses nothing. */
+    private fun offerMusic(done: String) {
+        if (isFinishing || isDestroyed || pairing.audioAddress() == null || pairing.musicAddress() != null) return
+        AlertDialog.Builder(this, R.style.AppDialog)
+            .setTitle("Pair for music too?")
+            .setMessage("$done Pair StarPilot as this phone's Bluetooth audio device to play music. You can do this later from the menu (Set up music only).")
+            .setPositiveButton("Pair music now") { _, _ -> startMusicOnly() }
+            .setNegativeButton("Later", null)
+            .show()
+    }
     /** Retries only the music bond; the app key from the earlier pairing stays untouched. */
     private fun startMusicOnly() {
         val permissions = bluetoothPermissions()
@@ -1051,13 +1056,14 @@ class MainActivity : Activity() {
     }
     private fun runMusicOnly() {
         val address = pairing.audioAddress() ?: return message("Pair the app with StarPilot first.")
-        val lan = Networks.commaLan(this) ?: return message("This phone isn't connected to StarPilot over Wi-Fi right now. Join StarPilot's Wi-Fi, then try again.")
+        val lan = Networks.commaLan(this)
         if (!autoPairing.compareAndSet(false, true)) return
         pairCancelled = false
         showPairProgress("Opening StarPilot's pairing window over Wi-Fi…", 1)
         Thread {
             try {
-                LanPairing.openWindow(lan.first, lan.second)?.let { why ->
+                // Without Wi-Fi, rely on Pair phone already being open on StarPilot.
+                if (lan != null) LanPairing.openWindow(lan.first, lan.second)?.let { why ->
                     hidePairProgress()
                     if (!pairCancelled) runOnUiThread { message("Couldn't open StarPilot's pairing window over Wi-Fi ($why).") }
                     return@Thread
