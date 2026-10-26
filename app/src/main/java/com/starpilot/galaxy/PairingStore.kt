@@ -8,7 +8,7 @@ class PairingStore(context: Context) {
     fun save(value: ByteArray, id: String? = null) {
         require(value.size == 32)
         val previous = id()
-        prefs.edit().remove("deviceAddress").remove("stale").remove("musicAddress").putString("key", SecureStore.encrypt(value))
+        prefs.edit().remove("deviceAddress").remove("stale").remove("musicAddress").remove("audioAddress").putString("key", SecureStore.encrypt(value))
             .apply { if (id != null && PHONE_ID.matches(id)) putString("id", id) else remove("id") }
             .apply { if (previous != null && previous != id) putString("previousId", previous) else remove("previousId") }
             .commit()
@@ -31,6 +31,11 @@ class PairingStore(context: Context) {
     fun rememberMusic(address: String) {
         if (address.matches(Regex("(?i)[0-9a-f]{2}(?::[0-9a-f]{2}){5}"))) prefs.edit().putString("musicAddress", address.uppercase()).apply()
     }
+    /** Comma's audio address from the last pairing, kept even when the music bond failed so music can be retried without re-pairing the app. */
+    fun rememberAudio(address: String) {
+        if (address.matches(Regex("(?i)[0-9a-f]{2}(?::[0-9a-f]{2}){5}"))) prefs.edit().putString("audioAddress", address.uppercase()).apply()
+    }
+    fun audioAddress(): String? = prefs.getString("audioAddress", null)
     fun musicAddress(): String? = prefs.getString("musicAddress", null)
     /** Comma stopped recognizing this key (forgotten there); the app stops reconnecting until it is paired again. */
     fun markStale() { prefs.edit().putBoolean("stale", true).apply() }
