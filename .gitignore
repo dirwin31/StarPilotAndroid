@@ -7,3 +7,7 @@ gradle/gradle-daemon-jvm.properties
 *.jks
 __pycache__/
 *.py[cod]
+
+# Temporary Android emulator and UI verification files
+.avd-ui/
+.aa-ui-check.png

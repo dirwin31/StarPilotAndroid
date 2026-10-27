@@ -1,124 +1,34 @@
-name: Galaxy Android release
+﻿name: Android Auto companion build
 on:
   push:
-    tags: ['direct-v*', 'play-v*']
+    branches: [AA-Play-Dev]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Matching direct-v<version> or play-v<version> tag
-        required: true
-      play_track:
-        description: Play track (ignored for Direct)
-        type: choice
-        options: [internal, alpha, beta, production, none]
-        default: internal
 permissions:
-  contents: write
-concurrency:
-  group: galaxy-release-${{ inputs.tag || github.ref_name }}
-  cancel-in-progress: false
+  contents: read
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: android-release
-    env:
-      PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Validate release channel and version
-        id: release
-        env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            case "$GITHUB_REF_NAME" in
-              direct-v*) channel=direct; branch=Direct-Distro ;;
-              play-v*) channel=play; branch=Play-Distro ;;
-              *) echo 'Use a direct-v or play-v release tag' >&2; exit 1 ;;
-            esac
-          else
-            case "$GITHUB_REF_NAME" in
-              Direct-Distro) channel=direct; branch=Direct-Distro ;;
-              Play-Distro) channel=play; branch=Play-Distro ;;
-              *) echo 'Manual releases must run from Direct-Distro or Play-Distro' >&2; exit 1 ;;
-            esac
-          fi
-          version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
-          test "$RELEASE_TAG" = "$channel-v$version" || { echo "Expected $channel-v$version" >&2; exit 1; }
-          git merge-base --is-ancestor HEAD "refs/remotes/origin/$branch" || { echo "Release commit is not in $branch" >&2; exit 1; }
-          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
-            test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)" || { echo 'Existing release tag points to a different commit' >&2; exit 1; }
-          fi
-          printf 'channel=%s\ntag=%s\n' "$channel" "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Android SDK
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0"
-      - name: Test
-        run: |
-          ./gradlew --max-workers=1 testDirectDebugUnitTest testPlayDebugUnitTest
-          node --test push-relay/relay.test.js push-relay/server.test.js
-      - name: Restore Direct signing key
-        if: steps.release.outputs.channel == 'direct'
-        env:
-          DIRECT_KEY: ${{ secrets.COMPANION_KEYSTORE_BASE64 }}
-        run: |
-          test -n "$DIRECT_KEY"
-          umask 077
-          printf '%s' "$DIRECT_KEY" | base64 -d > "$RUNNER_TEMP/companion.jks"
-      - name: Restore Play upload key
-        if: steps.release.outputs.channel == 'play'
+      - name: Restore companion upload key
         env:
           UPLOAD_KEY: ${{ secrets.COMPANION_UPLOAD_KEYSTORE_BASE64 }}
         run: |
           test -n "$UPLOAD_KEY"
-          umask 077
-          printf '%s' "$UPLOAD_KEY" | base64 -d > "$RUNNER_TEMP/upload.jks"
-      - name: Build Direct APK
-        if: steps.release.outputs.channel == 'direct'
+          printf '%s' "$UPLOAD_KEY" | base64 -d > "$RUNNER_TEMP/companion-upload.jks"
+      - name: Build independent companion bundle
         env:
-          COMPANION_KEYSTORE: ${{ runner.temp }}/companion.jks
-          COMPANION_KEY_PASSWORD: ${{ secrets.COMPANION_KEY_PASSWORD }}
-        run: |
-          test -n "$COMPANION_KEY_PASSWORD"
-          ./build_apk.sh
-          if unzip -l app/build/outputs/apk/direct/release/galaxy-direct.apk | grep -q 'assets/galaxy/'; then exit 1; fi
-      - name: Build Play bundle
-        if: steps.release.outputs.channel == 'play'
-        env:
-          COMPANION_UPLOAD_KEYSTORE: ${{ runner.temp }}/upload.jks
+          COMPANION_UPLOAD_KEYSTORE: ${{ runner.temp }}/companion-upload.jks
           COMPANION_UPLOAD_KEY_PASSWORD: ${{ secrets.COMPANION_UPLOAD_KEY_PASSWORD }}
+          AA_PRIMARY_CERT_SHA256: ${{ secrets.AA_PRIMARY_CERT_SHA256 }}
         run: |
-          test -n "$COMPANION_UPLOAD_KEY_PASSWORD"
-          ./build_play.sh
-      - name: Remove keys
-        if: always()
-        run: rm -f "$RUNNER_TEMP/companion.jks" "$RUNNER_TEMP/upload.jks"
-      - name: Publish Direct release
-        if: steps.release.outputs.channel == 'direct'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: gh release create "$RELEASE_TAG" app/build/outputs/apk/direct/release/galaxy-direct.apk --target "$GITHUB_SHA" --title "Galaxy Direct $RELEASE_TAG" --generate-notes
-      - name: Publish Play release
-        if: steps.release.outputs.channel == 'play'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: gh release create "$RELEASE_TAG" app/build/outputs/bundle/playRelease/app-play-release.aab --target "$GITHUB_SHA" --title "Galaxy $RELEASE_TAG" --generate-notes
-      - name: Upload to Google Play
-        if: ${{ steps.release.outputs.channel == 'play' && env.PLAY_JSON != '' && (inputs.play_track || 'internal') != 'none' }}
-        uses: r0adkll/upload-google-play@v1.1.3
+          test -n "$AA_PRIMARY_CERT_SHA256"
+          ./gradlew :app:bundleRelease
+      - uses: actions/upload-artifact@v4
         with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: com.starpilot.galaxy
-          releaseFiles: app/build/outputs/bundle/playRelease/app-play-release.aab
-          track: ${{ inputs.play_track || 'internal' }}
-          status: completed
+          name: android-auto-companion
+          path: app/build/outputs/bundle/release/*.aab

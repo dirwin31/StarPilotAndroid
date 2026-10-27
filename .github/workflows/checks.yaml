@@ -3,11 +3,23 @@ on:
   pull_request:
     branches: [Play-Dev, Direct-Dev, Play-Distro, Direct-Distro]
   push:
-    branches: [Play-Dev, Direct-Dev, Play-Distro, Direct-Distro]
+    branches: [AA-Play-Dev, Play-Dev, Direct-Dev, Play-Distro, Direct-Distro]
 permissions:
   contents: read
 jobs:
+  companion:
+    if: github.ref_name == 'AA-Play-Dev' || github.base_ref == 'AA-Play-Dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build and lint companion
+        run: ./gradlew :app:testDebugUnitTest :app:lintRelease :app:bundleRelease
   tooling:
+    if: github.ref_name != 'AA-Play-Dev' && github.base_ref != 'AA-Play-Dev'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -16,6 +28,7 @@ jobs:
           python-version: '3.12'
       - run: python3 -m unittest discover -s tests -p 'test_starpilot_cli.py'
   flavors:
+    if: github.ref_name != 'AA-Play-Dev' && github.base_ref != 'AA-Play-Dev'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

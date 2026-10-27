@@ -1,5 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="app_name">Galaxy: AA</string>
+    <string name="review_subtitle">Android Auto companion</string>
+    <string name="review_connection_heading">Galaxy connection</string>
+    <string name="review_checking">Checking…</string>
+    <string name="review_checking_detail">Verifying the secure bridge</string>
+    <string name="review_connected">Connected</string>
+    <string name="review_connected_detail">Galaxy is verified and ready for Android Auto</string>
+    <string name="review_not_found">Galaxy not found</string>
+    <string name="review_not_found_detail">Install Galaxy on this phone to use live controls</string>
+    <string name="review_unavailable">Connection unavailable</string>
+    <string name="review_unavailable_detail">Open or update Galaxy, then recheck</string>
+    <string name="review_recheck">Recheck connection</string>
+    <string name="review_open_galaxy">Open Galaxy</string>
+    <string name="review_get_galaxy">Get Galaxy</string>
+    <string name="review_mode_heading">Test Mode</string>
+    <string name="review_mode_intro">Explore Android Auto with sample data. No account or StarPilot hardware is required.</string>
+    <string name="review_mode_active">Test Mode is on. Connect to Android Auto to explore sample controls.</string>
+    <string name="enter_test_mode">Enable Test Mode</string>
+    <string name="exit_test_mode">Exit Test Mode</string>
+    <string name="review_car_hint">Connect your phone to Android Auto to open Galaxy: AA on your dashboard.</string>
     <string name="connections_title">Connections</string>
     <string name="close_connections">Close connections</string>
     <string name="permission_settings_note">Android manages these permissions. Turning an allowed permission off opens App settings. Phone GPS sharing and Sentry alerts are controlled separately.</string>
