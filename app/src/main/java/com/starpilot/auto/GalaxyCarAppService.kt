@@ -1,13 +1,8 @@
-package com.starpilot.galaxy
+package com.starpilot.auto
 
 import android.content.Intent
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
-import android.util.Base64
 import android.os.Handler
 import android.os.Looper
-import android.webkit.CookieManager
 import androidx.car.app.CarAppService
 import androidx.car.app.CarContext
 import androidx.car.app.CarToast
@@ -29,8 +24,6 @@ import androidx.car.app.model.Toggle
 import androidx.car.app.validation.HostValidator
 import androidx.core.graphics.drawable.IconCompat
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.Executors
 
@@ -108,9 +101,10 @@ private class GalaxyCarScreen(context: CarContext, private val page: String, pri
         if (page == "home") return homeTemplate()
         val data = snapshot
         if (data == null && error != null) {
-            val issue = ItemList.Builder().addItem(connectionRow()).build()
+            val issue = ItemList.Builder().addItem(connectionRow())
+            if (!api.isTestMode && !api.hasCompanionConnection) issue.addItem(testModeRow())
             return ListTemplate.Builder().setTitle("Galaxy").setHeaderAction(Action.BACK)
-                .setSingleList(issue).build()
+                .setSingleList(issue.build()).build()
         }
         val list = ItemList.Builder()
         if (page == "sections") {
@@ -159,9 +153,8 @@ private class GalaxyCarScreen(context: CarContext, private val page: String, pri
                     val enabled = carSwitchAllowed(options, available, action, value)
                     val description = item.optString("reason").take(300)
                     val status = when {
-                        savingToggle == i -> "Saving…"
-                        !available -> "Disabled · $value"
-                        !action -> "Read only · $value"
+                        !available -> "Disabled"
+                        !action -> "Read only"
                         !binary -> "Unavailable"
                         else -> ""
                     }
@@ -175,7 +168,7 @@ private class GalaxyCarScreen(context: CarContext, private val page: String, pri
                             if (view.isBlank()) return@Builder
                             if (item.optBoolean("confirm")) {
                                 screenManager.push(GalaxyCarConfirmationScreen(
-                                    carContext, api, view, i, label, if (checked) "On" else "Off"
+                                    carContext, api, page, view, i, label, if (checked) "On" else "Off"
                                 ) { refresh() })
                             } else saveToggle(view, i, checked)
                         }.setChecked(value == "On")
@@ -200,23 +193,24 @@ private class GalaxyCarScreen(context: CarContext, private val page: String, pri
         val list = ItemList.Builder()
         when (activeTab) {
             "home" -> addOverview(list)
-            "monitor" -> if (snapshot == null) list.addItem(connectionRow()) else addStatistics(list, snapshot)
+            "monitor" -> if (snapshot == null) addConnectionActions(list) else addStatistics(list, snapshot)
             else -> when {
-                snapshot == null -> list.addItem(connectionRow())
+                snapshot == null -> addConnectionActions(list)
                 navigationError != null -> list.addItem(connectionRow("Controls unavailable") { loadNavigation() })
                 else -> addSections(list, navigation)
             }
         }
+        if (api.isTestMode) list.addItem(row("Exit Test Mode", "Try the Galaxy app connection") { switchMode(false) })
         if (carContext.carAppApiLevel < 6) {
             list.addItem(row("Device Health", "Model and device status") { open("monitor") })
-            list.addItem(row("Controls", "Galaxy settings by category") { open("sections") })
+            list.addItem(row("Toggles", "Galaxy settings by category") { open("sections") })
             return ListTemplate.Builder().setTitle("Galaxy").setHeaderAction(Action.APP_ICON)
                 .setSingleList(list.build()).build()
         }
         val tabs = listOf(
-            Triple("home", "Overview", R.drawable.ic_car_overview),
+            Triple("home", "Home", R.drawable.ic_car_overview),
             Triple("monitor", "Device Health", R.drawable.ic_car_temperatures),
-            Triple("toggles", "Controls", R.drawable.ic_car_toggles)
+            Triple("toggles", "Toggles", R.drawable.ic_car_toggles)
         )
         val builder = TabTemplate.Builder(object : TabTemplate.TabCallback {
             override fun onTabSelected(tabContentId: String) {
@@ -236,7 +230,10 @@ private class GalaxyCarScreen(context: CarContext, private val page: String, pri
 
     private fun addOverview(list: ItemList.Builder) {
         list.addItem(connectionRow())
-        if (snapshot == null) return
+        if (snapshot == null) {
+            if (!api.isTestMode && error != null && !api.hasCompanionConnection) list.addItem(testModeRow())
+            return
+        }
         val stats = driving
         if (stats == null) {
             list.addItem(Row.Builder().setTitle("Recent device activity")
@@ -272,15 +269,12 @@ private class GalaxyCarScreen(context: CarContext, private val page: String, pri
 
     private fun addStatistics(list: ItemList.Builder, data: JSONObject?) {
         val memory = data?.optJSONObject("memory")
-        val storage = data?.optJSONObject("storage")
         val vitals = data?.optJSONObject("vitals")
         list.addItem(Row.Builder().setTitle("Device load")
             .addText("CPU ${displayedReading(data?.optDouble("cpuPercent", Double.NaN), "%")} · RAM ${displayedReading(memory?.optDouble("percent", Double.NaN), "%")}").build())
         list.addItem(Row.Builder().setTitle("Current model").addText(modelName()).build())
         list.addItem(Row.Builder().setTitle("Operating temperature")
             .addText(displayedReading(vitals?.optDouble("cpuTempC", Double.NaN), "°C")).build())
-        list.addItem(Row.Builder().setTitle("Device capacity")
-            .addText("RAM ${displayedReading(memory?.optDouble("usedMiB", Double.NaN), "MiB")} · Storage ${displayedReading(storage?.optDouble("usedGiB", Double.NaN), "GiB")}").build())
     }
 
     private fun modelName(): String {
@@ -351,6 +345,7 @@ private class GalaxyCarScreen(context: CarContext, private val page: String, pri
         retry: () -> Unit = { refresh(true) }
     ): Row {
         val detail = when {
+            api.isTestMode -> "Sample data · No device connection"
             loading -> "Connecting…"
             message != null -> "$message · Tap to retry"
             error?.contains("Set up this Galaxy app", ignoreCase = true) == true ->
@@ -359,8 +354,33 @@ private class GalaxyCarScreen(context: CarContext, private val page: String, pri
             error != null -> "Unable to connect · Tap to retry"
             else -> "${api.lastTransport} · Tap to refresh"
         }
-        return Row.Builder().setTitle("Galaxy connection")
+        return Row.Builder().setTitle(if (api.isTestMode) "Test Mode" else "Galaxy connection")
             .addText(detail).setOnClickListener(retry).build()
+    }
+
+    private fun addConnectionActions(list: ItemList.Builder) {
+        list.addItem(connectionRow())
+        if (!api.isTestMode && error != null && !api.hasCompanionConnection) list.addItem(testModeRow())
+    }
+
+    private fun testModeRow(): Row = row("Test Mode", "Explore sample controls without Galaxy or hardware") {
+        switchMode(true)
+    }
+
+    private fun switchMode(enabled: Boolean) {
+        ReviewMode.setActive(carContext, enabled)
+        generation++
+        loading = false
+        snapshot = null
+        error = null
+        driving = null
+        drivingError = null
+        model = null
+        navigation = null
+        navigationError = null
+        navigationLoading = false
+        savingToggle = null
+        refresh(true)
     }
 
     private fun row(title: String, subtitle: String, click: () -> Unit) =
@@ -380,18 +400,17 @@ private class GalaxyCarScreen(context: CarContext, private val page: String, pri
 
     private fun visibleHomeReadings(): String = when (activeTab) {
         "home" -> "$error|$drivingError|${api.lastTransport}|${driving?.optJSONObject("lastDrive")}|${driving?.optJSONObject("totals")}|${driving?.optJSONObject("week")}" 
-        "monitor" -> "$error|${model?.optString("loadedId")}|${model?.optString("health")}|${snapshot?.optDouble("cpuPercent")}|${snapshot?.optJSONObject("memory")}|${snapshot?.optJSONObject("storage")}|${snapshot?.optJSONObject("vitals")}|${snapshot?.optJSONArray("cores")}" 
+        "monitor" -> "$error|${model?.optString("loadedId")}|${model?.optString("health")}|${snapshot?.optDouble("cpuPercent")}|${snapshot?.optJSONObject("memory")}|${snapshot?.optJSONObject("vitals")}|${snapshot?.optJSONArray("cores")}"
         else -> "toggles"
     }
 
     private fun saveToggle(view: String, index: Int, checked: Boolean) {
         if (savingToggle != null) return
         savingToggle = index
-        invalidate()
         worker.execute {
             val result = runCatching {
                 val preview = api.preview(view, index, if (checked) "On" else "Off")
-                api.confirm(preview.getString("intent"))
+                api.confirm(preview.getString("intent"), page)
             }
             main.post {
                 if (lifecycle.currentState == Lifecycle.State.DESTROYED) return@post
@@ -460,6 +479,7 @@ internal fun carSwitchAllowed(choices: List<String>, available: Boolean, action:
 private class GalaxyCarConfirmationScreen(
     context: CarContext,
     private val api: CarGalaxyApi,
+    private val page: String,
     private val view: String,
     private val row: Int,
     private val label: String,
@@ -520,7 +540,7 @@ private class GalaxyCarConfirmationScreen(
         saving = true
         invalidate()
         worker.execute {
-            val result = runCatching { api.confirm(pending) }
+            val result = runCatching { api.confirm(pending, page) }
             main.post {
                 if (!active) return@post
                 saving = false
@@ -538,7 +558,9 @@ private class GalaxyCarConfirmationScreen(
 }
 
 private class CarGalaxyApi(private val context: CarContext) {
-    private var ownBluetooth: BleTransport? = null
+    val isTestMode: Boolean get() = ReviewMode.isActive(context)
+    val hasCompanionConnection: Boolean get() = bridge.isConnected
+    private val bridge = GalaxyBridgeClient(context)
     private val demo by lazy { CarReviewDemo(context) }
     @Volatile var lastTransport: String = "Not connected yet"
         private set
@@ -547,139 +569,18 @@ private class CarGalaxyApi(private val context: CarContext) {
     fun preview(view: String, row: Int, selection: String): JSONObject =
         post("/api/settings/preview", JSONObject().put("view", view).put("row", row).put("value", selection))
 
-    fun confirm(intent: String) {
-        check(post("/api/settings/confirm", JSONObject().put("intent", intent).put("confirmed", true))
+    fun confirm(intent: String, page: String) {
+        check(post("/api/settings/confirm", JSONObject().put("intent", intent).put("confirmed", true).put("page", page))
             .optBoolean("saved")) { "Galaxy did not confirm the change." }
     }
 
-    private fun internetNetwork(): android.net.Network? = Networks.manager(context).run {
-        listOfNotNull(activeNetwork).plus(allNetworks).firstOrNull { network ->
-            getNetworkCapabilities(network)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-        }
-    }
-
     @Synchronized private fun request(path: String, payload: JSONObject?): JSONObject {
-        if (context.getSharedPreferences("review_demo", android.content.Context.MODE_PRIVATE).getBoolean("active", false)) {
+        if (ReviewMode.isActive(context)) {
             lastTransport = "Offline demo"
             return demo.request(path, payload)
         }
-        val mode = "auto"
-        val lan = Networks.commaLan(context)
-        val remote = TunnelStore(context).load()
-        val pairing = PairingStore(context)
-        val internet = internetNetwork() != null
-        val bluetooth = ownBluetooth?.open == true || BleTransport.active?.open == true ||
-            pairing.load() != null && !pairing.stale()
-        var previous: Route? = null
-        var lastFailure: Exception? = null
-        while (true) {
-            val route = RoutePlanner.next(previous, mode, lan != null, internet, remote != null, bluetooth) ?: break
-            try {
-                return when (route) {
-                    Route.GALAXY_WIFI, Route.HOME_NETWORK -> requestLan(lan!!, path, payload)
-                    Route.TUNNEL -> requestRemote(remote!!, path, payload)
-                    Route.BLUETOOTH -> requestBluetooth(path, payload)
-                }
-            } catch (failure: Exception) {
-                lastFailure = failure
-                // A write may already have applied. Only retry reads on another route.
-                if (payload != null) throw failure
-                previous = route
-            }
-        }
-        if (remote == null && !bluetooth)
-            throw IllegalStateException("Set up this Galaxy app on your phone when parked.", lastFailure)
-        throw lastFailure ?: IllegalStateException("No saved Galaxy connection. Set up Wi-Fi, HTTPS or Bluetooth on the phone when parked.")
+        return bridge.request(path, payload).also { lastTransport = bridge.lastTransport }
     }
 
-    private fun requestLan(lan: Pair<android.net.Network, String>, path: String, payload: JSONObject?): JSONObject {
-        val (network, origin) = lan
-        val connection = network.openConnection(URL(origin + path)) as HttpURLConnection
-        try {
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
-            connection.setRequestProperty("Accept", "application/json")
-            CookieManager.getInstance().getCookie(origin)?.let { connection.setRequestProperty("Cookie", it) }
-            if (payload != null) {
-                connection.requestMethod = "POST"
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.setRequestProperty("Origin", origin)
-                connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-            }
-            val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
-            return parseReply(connection.responseCode, stream?.bufferedReader()?.use { it.readText() }.orEmpty())
-                .also { lastTransport = "Wi-Fi" }
-        } finally { connection.disconnect() }
-    }
-
-    private fun requestRemote(credential: TunnelCredential, path: String, payload: JSONObject?): JSONObject {
-        val network = internetNetwork()
-            ?: throw java.io.IOException("Phone internet is unavailable.")
-        val connection = network.openConnection(URL(credential.webUrl + path.removePrefix("/"))) as HttpURLConnection
-        try {
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
-            connection.instanceFollowRedirects = false
-            connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("Cookie", "galaxy_session=${credential.sessionToken}")
-            if (payload != null) {
-                connection.requestMethod = "POST"
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.setRequestProperty("Origin", "https://galaxy.firestar.link")
-                connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-            }
-            val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
-            return parseReply(connection.responseCode, stream?.bufferedReader()?.use { it.readText() }.orEmpty())
-                .also { lastTransport = "HTTPS" }
-        } finally { connection.disconnect() }
-    }
-
-    private fun requestBluetooth(path: String, payload: JSONObject?): JSONObject {
-        if (Build.VERSION.SDK_INT >= 31 &&
-            (context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
-             context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED))
-            throw IllegalStateException("Allow Nearby devices in Galaxy on your phone.")
-        val transport = ownBluetooth?.takeIf { it.open } ?: BleTransport.active?.takeIf { it.open } ?: run {
-            val pairing = PairingStore(context)
-            val key = pairing.load()?.takeUnless { pairing.stale() }
-                ?: throw IllegalStateException("Connect Galaxy on your phone or pair Bluetooth in the phone app.")
-            val hello = JSONObject().put("name", "${Build.MANUFACTURER} ${Build.MODEL}".take(40))
-            pairing.previousId()?.let { hello.put("replaces", it) }
-            BleTransport(context, key, hello).also { created ->
-                try {
-                    pairing.rememberDevice(created.connect(pairing.deviceAddress()))
-                    ownBluetooth = created
-                } catch (failure: Exception) {
-                    created.close()
-                    throw failure
-                }
-            }
-        }
-        val body = payload?.toString()?.toByteArray(Charsets.UTF_8) ?: byteArrayOf()
-        val command = JSONObject().put("method", if (payload == null) "GET" else "POST")
-            .put("path", path)
-            .put("headers", JSONObject().put("Content-Type", "application/json"))
-            .put("body", if (body.isEmpty()) "" else Base64.encodeToString(body, Base64.NO_WRAP))
-        val reply = transport.request(command)
-        val response = Base64.decode(reply.optString("body"), Base64.DEFAULT).toString(Charsets.UTF_8)
-        return parseReply(reply.optInt("status"), response).also { lastTransport = "Bluetooth" }
-    }
-
-    private fun parseReply(status: Int, response: String): JSONObject {
-        val json = runCatching { JSONObject(response) }.getOrElse { JSONObject() }
-        if (status != 200) {
-            val message = json.optString("error", "Galaxy request failed (HTTP $status)")
-            if (status == 403 && message in setOf("Local access only", "Remote Galaxy request denied"))
-                throw java.io.IOException(message)
-            throw IllegalStateException(message)
-        }
-        return json
-    }
-
-    @Synchronized fun close() {
-        ownBluetooth?.close()
-        ownBluetooth = null
-    }
+    @Synchronized fun close() = bridge.close()
 }

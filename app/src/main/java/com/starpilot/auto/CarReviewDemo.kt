@@ -1,11 +1,11 @@
-package com.starpilot.galaxy
+package com.starpilot.auto
 
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-/** Offline, opt-in data for reviewers using the phone and Android Auto together. */
+/** Offline, opt-in data for reviewers using Android Auto without the primary app. */
 internal class CarReviewDemo(private val context: Context) {
     private val pending = mutableMapOf<String, Triple<String, Int, String>>()
     private val pages = mutableMapOf<String, JSONObject>()
