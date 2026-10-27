@@ -412,12 +412,13 @@ class MainActivity : Activity() {
     }
     private fun message(text: String) { if (isFinishing || isDestroyed) return; AlertDialog.Builder(this).setMessage(text).setPositiveButton("OK", null).show() }
     private fun showDemo() {
+        getSharedPreferences("review_demo", MODE_PRIVATE).edit().putBoolean("active", true).apply()
         demoSession?.close(); demoSession = null
         SentryPush.suspended = true
         supersedeConnection()
         stopService(Intent(this, UplinkService::class.java)); stopService(Intent(this, PhoneGpsService::class.java))
         SentryPollJob.cancel(this)
-        demoSession = DemoSession(this) { demoSession?.close(); demoSession = null; SentryPush.suspended = false; intent.removeExtra("demo"); disconnected() }
+        demoSession = DemoSession(this) { demoSession?.close(); demoSession = null; getSharedPreferences("review_demo", MODE_PRIVATE).edit().putBoolean("active", false).apply(); SentryPush.suspended = false; intent.removeExtra("demo"); disconnected() }
         demoSession!!.show(intent.getStringExtra("openRoute") ?: "/")
     }
     private fun connections() {
@@ -1386,7 +1387,7 @@ class MainActivity : Activity() {
         @JavascriptInterface fun openWifiSettings() { runOnUiThread { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) } }
     }
     private fun navigateBack() {
-        if (demoSession != null) { if (demoSession!!.web.canGoBack()) demoSession!!.web.goBack() else { demoSession?.close(); demoSession = null; SentryPush.suspended = false; intent.removeExtra("demo"); disconnected() }; return }
+        if (demoSession != null) { if (demoSession!!.web.canGoBack()) demoSession!!.web.goBack() else { demoSession?.close(); demoSession = null; getSharedPreferences("review_demo", MODE_PRIVATE).edit().putBoolean("active", false).apply(); SentryPush.suspended = false; intent.removeExtra("demo"); disconnected() }; return }
         if (web?.canGoBack() == true) web?.goBack() else {
             if (Build.VERSION.SDK_INT >= 33) backCallback?.let { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it) }
             finish()
@@ -1405,6 +1406,7 @@ class MainActivity : Activity() {
         super.onStop()
     }
     override fun onDestroy() {
+        if (isFinishing) getSharedPreferences("review_demo", MODE_PRIVATE).edit().putBoolean("active", false).apply()
         demoSession?.close(); demoSession = null; SentryPush.suspended = false
         SentryPush.api = null
         pairCancelled = true; pairTransport?.close(); hidePairProgress()

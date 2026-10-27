@@ -10,7 +10,7 @@ android {
         applicationId = "link.firestar.companion"
         minSdk = 26
         targetSdk = 36
-        versionCode = 34
+        versionCode = 35
         versionName = "7.0.0.0"
     }
     signingConfigs {
@@ -53,6 +53,8 @@ android {
 }
 
 dependencies {
+    implementation("androidx.car.app:app:1.7.0")
+    implementation("androidx.car.app:app-projected:1.7.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.google.code.gson:gson:2.11.0") { isTransitive = false }
     if (firebaseEnabled) {

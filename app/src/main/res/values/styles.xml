@@ -1,4 +1,8 @@
 <resources>
+    <style name="CarAppTheme">
+        <item name="carColorPrimary">#1A73E8</item>
+        <item name="carColorPrimaryDark">#1557B0</item>
+    </style>
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item><item name="android:colorAccent">#9d72ff</item>
         <item name="android:windowLightStatusBar">false</item><item name="android:windowBackground">#070712</item>

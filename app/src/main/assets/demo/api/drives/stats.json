@@ -50,7 +50,11 @@
       }
     ]
   },
-  "lastDrive": null,
+  "lastDrive": {
+    "distanceMeters": 18400,
+    "durationSeconds": 1620,
+    "engagedPercent": 87
+  },
   "recentDrives": [],
   "records": [
     {
