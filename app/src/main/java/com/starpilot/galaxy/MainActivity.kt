@@ -747,6 +747,7 @@ class MainActivity : Activity() {
         @JavascriptInterface fun connectionOptions() { runOnUiThread { connections() } }
         @JavascriptInterface fun distribution() = BuildConfig.DISTRIBUTION
         @JavascriptInterface fun version() = BuildConfig.VERSION_NAME
+        @JavascriptInterface fun androidAutoCompanionStatus() = link.firestar.companion.GalaxyBridgeService.status(this@MainActivity)
         @JavascriptInterface fun remoteKeyState() = JSONObject().put("present", tunnel.load() != null).put("verified", tunnel.verified()).toString()
         @JavascriptInterface fun addRemoteKey() { runOnUiThread { this@MainActivity.addRemoteKey() } }
         @JavascriptInterface fun demo() = false
@@ -1358,6 +1359,7 @@ class MainActivity : Activity() {
         @JavascriptInterface fun connectionOptions() { runOnUiThread { connections() } }
         @JavascriptInterface fun distribution() = BuildConfig.DISTRIBUTION
         @JavascriptInterface fun version() = BuildConfig.VERSION_NAME
+        @JavascriptInterface fun androidAutoCompanionStatus() = link.firestar.companion.GalaxyBridgeService.status(this@MainActivity)
         @JavascriptInterface fun installUpdate() { runOnUiThread { requestAppUpdate() } }
         @JavascriptInterface fun uplinkState() = JSONObject().put("enabled", prefs.getBoolean("enabled", false)).put("autoStart", prefs.getBoolean("autoStart", false))
             .put("bytes", if (prefs.getString("day", "") == java.time.LocalDate.now().toString()) prefs.getLong("bytes", 0) else 0).toString()

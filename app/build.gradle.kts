@@ -1,6 +1,8 @@
 plugins { id("com.android.application") }
 
 val firebaseEnabled = file("google-services.json").exists()
+val aaSignerSha256 = System.getenv("AA_COMPANION_CERT_SHA256")?.uppercase().orEmpty()
+require(aaSignerSha256.isEmpty() || aaSignerSha256.matches(Regex("[0-9A-F]{64}")))
 if (firebaseEnabled) apply(plugin = "com.google.gms.google-services")
 
 android {
@@ -12,6 +14,7 @@ android {
         targetSdk = 36
         versionCode = 34
         versionName = "7.0.0.0"
+        buildConfigField("String", "AA_COMPANION_CERT_SHA256", "\"$aaSignerSha256\"")
     }
     signingConfigs {
         create("upload") {
@@ -31,6 +34,7 @@ android {
     productFlavors {
         create("direct") {
             dimension = "distribution"
+            manifestPlaceholders["aaBridgeEnabled"] = "false"
             applicationId = "link.firestar.companion"
             resValue("string", "app_name", "Galaxy")
             buildConfigField("String", "DISTRIBUTION", "\"direct\"")
@@ -38,6 +42,7 @@ android {
         }
         create("play") {
             dimension = "distribution"
+            manifestPlaceholders["aaBridgeEnabled"] = "true"
             applicationId = "com.starpilot.galaxy"
             resValue("string", "app_name", "Galaxy")
             buildConfigField("String", "DISTRIBUTION", "\"play\"")

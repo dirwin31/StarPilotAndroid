@@ -22,7 +22,14 @@ class SentryApi(val origin: String, private val cookie: String, private val netw
                 connection.setRequestProperty("Content-Type", "application/json")
                 connection.outputStream.use { it.write(body.toString().toByteArray()) }
             }
-            require(connection.responseCode == 200) { "Galaxy HTTP ${connection.responseCode}" }
+            val status = connection.responseCode
+            if (status != 200) {
+                val detail = runCatching {
+                    connection.errorStream?.bufferedReader()?.use { it.readText().take(4096) }
+                        ?.let { JSONObject(it).optString("error").take(160) }
+                }.getOrNull()?.takeIf { it.isNotBlank() }
+                throw IllegalStateException("Galaxy HTTP $status${detail?.let { ": $it" }.orEmpty()}")
+            }
             val value = connection.inputStream.use { input ->
                 val output = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(8192)

@@ -95,8 +95,10 @@ jobs:
         env:
           COMPANION_UPLOAD_KEYSTORE: ${{ runner.temp }}/upload.jks
           COMPANION_UPLOAD_KEY_PASSWORD: ${{ secrets.COMPANION_UPLOAD_KEY_PASSWORD }}
+          AA_COMPANION_CERT_SHA256: ${{ secrets.AA_COMPANION_CERT_SHA256 }}
         run: |
           test -n "$COMPANION_UPLOAD_KEY_PASSWORD"
+          test -n "$AA_COMPANION_CERT_SHA256"
           ./build_play.sh
       - name: Remove keys
         if: always()

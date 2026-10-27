@@ -28,6 +28,8 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
     @Volatile var onPhase: (String) -> Unit = {}
     private val context: Context = context.applicationContext
     companion object {
+        /** Serializes connection creation across the phone UI and the car bridge. */
+        val connectionLock = Any()
         fun uuid(part: String): UUID = UUID.fromString("bd49000$part-6dc1-4de7-a7d0-6cdb441f7650")
         // comma keeps one session per phone, so every sender shares the newest connection.
         @SuppressLint("StaticFieldLeak") @Volatile var active: BleTransport? = null
@@ -79,9 +81,11 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
     }
     /** Returns the authenticated device address so the next connection can skip scanning. */
     @Synchronized fun connect(preferredAddress: String? = null): String {
-        check(!closed)
-        connecting.incrementAndGet()
-        try { return connectOnce(preferredAddress) } finally { connecting.decrementAndGet() }
+        return synchronized(connectionLock) {
+            check(!closed)
+            connecting.incrementAndGet()
+            try { connectOnce(preferredAddress) } finally { connecting.decrementAndGet() }
+        }
     }
     private fun connectOnce(preferredAddress: String?): String {
         val device = try { linkUp(preferredAddress) } catch (e: GattDenied) {
