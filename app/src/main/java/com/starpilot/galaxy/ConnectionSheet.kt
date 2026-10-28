@@ -53,10 +53,17 @@ class ConnectionSheet(private val activity: Activity, current: Transport) {
             }, LinearLayout.LayoutParams(px(44), px(44)))
         })
         content.addView(LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            Transport.entries.forEachIndexed { index, transport ->
-                val tile = tile(transport); tiles[transport] = tile
-                addView(tile, LinearLayout.LayoutParams(0, px(84), 1f).apply { if (index > 0) marginStart = px(8) })
+            orientation = LinearLayout.VERTICAL
+            Transport.entries.chunked(2).forEachIndexed { rowIndex, pair ->
+                addView(LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    pair.forEachIndexed { index, transport ->
+                        val tile = tile(transport); tiles[transport] = tile
+                        addView(tile, LinearLayout.LayoutParams(0, px(72), 1f).apply {
+                            if (index > 0) marginStart = px(8)
+                        })
+                    }
+                }, LinearLayout.LayoutParams(-1, -2).apply { if (rowIndex > 0) topMargin = px(8) })
             }
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(16) })
         content.addView(summary, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(10) })
@@ -140,6 +147,7 @@ class ConnectionSheet(private val activity: Activity, current: Transport) {
         }
         Group(list).build()
         content.addView(list, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(8) })
+        list.elevation = px(8).toFloat()
     }
 
     inner class Group(private val list: LinearLayout) {
@@ -186,6 +194,7 @@ class ConnectionSheet(private val activity: Activity, current: Transport) {
         tiles.forEach { (transport, tile) ->
             val on = transport == selected
             val color = if (on) Palette.VIOLET_SOFT else Palette.MUTED
+            tile.elevation = if (on) px(8).toFloat() else 0f
             (tile.getChildAt(0) as ImageView).imageTintList = ColorStateList.valueOf(color)
             (tile.getChildAt(1) as TextView).setTextColor(if (on) Palette.ON else Palette.MUTED)
             tile.isSelected = on
