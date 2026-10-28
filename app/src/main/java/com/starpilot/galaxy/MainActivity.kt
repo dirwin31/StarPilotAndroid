@@ -358,7 +358,7 @@ class MainActivity : Activity() {
         }
     }
     private fun joinWifi(hint: String) {
-        Toast.makeText(this, hint, Toast.LENGTH_LONG).show()
+        showNotice(hint)
         startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
     }
     private fun openTypedAddress(value: String): String? {
@@ -411,6 +411,45 @@ class MainActivity : Activity() {
         overlay.dismiss()
     }
     private fun message(text: String) { if (isFinishing || isDestroyed) return; AlertDialog.Builder(this).setMessage(text).setPositiveButton("OK", null).show() }
+    private fun completionCheck(label: String) = CheckBox(this).apply {
+        text = label
+        isChecked = true
+        isClickable = false
+        isFocusable = false
+        setTextColor(Palette.ON)
+        buttonTintList = android.content.res.ColorStateList.valueOf(Palette.CYAN)
+        val inset = (20 * resources.displayMetrics.density).toInt()
+        setPadding(inset, 0, inset, 0)
+    }
+    private fun showNotice(text: String) {
+        if (isFinishing || isDestroyed) return
+        val root = findViewById<android.widget.FrameLayout>(android.R.id.content)
+        val density = resources.displayMetrics.density
+        fun dp(value: Int) = (value * density).toInt()
+        val notice = TextView(this).apply {
+            this.text = text
+            textSize = 14f
+            setTextColor(Palette.ON)
+            typeface = Palette.medium
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(Palette.SURFACE)
+                setStroke(dp(1), Palette.VIOLET)
+            }
+            elevation = dp(12).toFloat()
+            alpha = 0f
+        }
+        root.addView(notice, android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM).apply {
+            marginStart = dp(16); marginEnd = dp(16); bottomMargin = dp(32)
+        })
+        notice.animate().alpha(1f).setDuration(180).start()
+        notice.postDelayed({
+            notice.animate().alpha(0f).setDuration(180)
+                .withEndAction { root.removeView(notice) }.start()
+        }, 3500)
+    }
     private fun showDemo() {
         demoSession?.close(); demoSession = null
         SentryPush.suspended = true
@@ -424,23 +463,27 @@ class MainActivity : Activity() {
         demoSession?.let { it.options(); return }
         ConnectionSheet(this, Transport.of(prefs.getString("transport", "auto")))
             .onTransport { prefs.edit().putString("transport", it.key).apply(); connect() }
-            .group("Home network") {
-                action("Find StarPilot on this network", "Search this Wi-Fi for Galaxy") { discoverLan(fromMenu = true) }
-                action("Type StarPilot's address", "For routers that block discovery") {
-                    val field = EditText(this@MainActivity).apply { setText(prefs.getString("host", Networks.ORIGIN)); setSingleLine() }
-                    AlertDialog.Builder(this@MainActivity).setTitle("Local Galaxy address").setView(field).setPositiveButton("Connect") { _, _ ->
-                        val host = Networks.localOrigin(Networks.typedAddress(field.text.toString()))
-                        if (host == null) message("Use a private IPv4 address on port 8082") else {
-                            prefs.edit().putString("host", host).putString("transport", "wifi").apply(); connect(host)
-                        }
-                    }.setNegativeButton("Cancel", null).show()
+            .group("Remote access") {
+                action("Sign in with Galaxy ID", "Use your Galaxy ID and password") { signInRemote() }
+                action("Remote key", if (tunnel.load() == null) "No key saved · set up from the Remote route on the connection screen"
+                    else if (tunnel.verified()) "Verified for firestar.link" else "Saved · verification pending") {
+                    AlertDialog.Builder(this@MainActivity).setTitle("Remote access")
+                        .setMessage("Remote connects through firestar.link when local Wi-Fi is unavailable. Use the Remote route on the connection screen to paste an App key, or sign in here.")
+                        .setPositiveButton("Done", null).show()
+                }
+                if (tunnel.load() != null) action("Forget remote key", danger = true) {
+                    tunnel.clear(); if (activeRoute == Route.TUNNEL) connect()
                 }
             }
-            .group("Remote · firestar.link") {
-                action("Sign in with Galaxy ID", "Use your Galaxy ID and password") { signInRemote() }
-                action("Paste Galaxy app key", "Copy it from StarPilot → Galaxy → Access") { addRemoteKey() }
-                if (tunnel.load() != null) action("Forget remote key") { tunnel.clear(); if (activeRoute == Route.TUNNEL) connect() }
-                action("Details", "${Route.entries.joinToString("\n") { route -> route.title + ": " + (routeDetails[route] ?: "Not checked") }}\nKey present: ${tunnel.load() != null}, verified: ${tunnel.verified()}\n$routeError") {}
+            .group("Connection status") {
+                action("View route details", "See the latest result for each connection route") {
+                    val details = Route.entries.joinToString("\n") { route ->
+                        "${route.title}: ${routeDetails[route] ?: "Not checked"}"
+                    }
+                    AlertDialog.Builder(this@MainActivity).setTitle("Connection status")
+                        .setMessage(details + if (routeError.isBlank()) "" else "\n\nRemote: $routeError")
+                        .setPositiveButton("Done", null).show()
+                }
             }
             .group("Bluetooth pairing") {
                 action("Add Bluetooth Phone Pairing", "First open Pair phone on StarPilot (Settings > Bluetooth), then tap here") { pairPhone() }
@@ -448,7 +491,10 @@ class MainActivity : Activity() {
                     action("Set up music only", "Keeps the app pairing. Join StarPilot's Wi-Fi (or open Pair phone on StarPilot), then tap here") { startMusicOnly() }
                 action("Forget pairing on this phone") {
                     pairing.forget(); ble?.close(); disconnected()
-                    message("Pairing removed from this phone.\n\n$ALSO_FORGET_ON_COMMA")
+                    AlertDialog.Builder(this@MainActivity).setTitle("Pairing removed")
+                        .setView(completionCheck("Removed from this phone"))
+                        .setMessage(ALSO_FORGET_ON_COMMA)
+                        .setPositiveButton("Done", null).show()
                 }
             }
             .group("Phone GPS") {
@@ -456,7 +502,19 @@ class MainActivity : Activity() {
                 else action("Share phone GPS with StarPilot", "StarPilot uses it for navigation when its own GPS has no fix") { setPhoneGps(true) }
             }
             .group("Permissions") {
-                action("Manage permissions", "Nearby devices, precise location, notifications") { showPermissions() }
+                val permissions = listOf(
+                    Triple("Nearby devices", if (Build.VERSION.SDK_INT >= 31) bluetoothPermissions() else emptyArray(), 21),
+                    Triple("Precise location", arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 22),
+                    Triple("Notifications", if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray(), 23),
+                )
+                permissions.forEach { (name, required, code) ->
+                    if (required.isNotEmpty()) {
+                        val allowed = required.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+                        action(name, if (allowed) "✓ Allowed · tap to manage in Android settings" else "Not allowed · tap to allow") {
+                            if (allowed) permissionSettings(name) else requestFeaturePermissions(required, code, name)
+                        }
+                    }
+                }
             }
             .group("Debugging options") {
                 action("Notification details", "View push registration and delivery status") {
@@ -476,8 +534,6 @@ class MainActivity : Activity() {
             }
             .show()
     }
-    private var permissionDialog: AlertDialog? = null
-    private val permissionSwitches = mutableMapOf<String, Switch>()
     private fun appSettings() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
     }
@@ -510,51 +566,6 @@ class MainActivity : Activity() {
         else AlertDialog.Builder(this).setTitle("$name wasn't allowed")
             .setMessage("This feature needs $name. You can try again from Permissions in Connections.")
             .setPositiveButton("OK", null).show()
-    }
-    private fun showPermissions() {
-        permissionDialog?.dismiss()
-        permissionSwitches.clear()
-        val padding = (20 * resources.displayMetrics.density).toInt()
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(padding, padding / 2, padding, padding / 2) }
-        val groups = listOf(
-            Triple("Nearby devices", if (Build.VERSION.SDK_INT >= 31) bluetoothPermissions() else emptyArray(), 21),
-            Triple("Precise location", arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 22),
-            Triple("Notifications", if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray(), 23),
-        )
-        groups.forEach { (name, permissions, code) ->
-            if (permissions.isEmpty()) return@forEach
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL; minimumHeight = padding * 3 }
-            val label = TextView(this).apply { text = name; textSize = 16f; setTextColor(Palette.ON) }
-            val toggle = Switch(this).apply {
-                isChecked = permissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
-                contentDescription = "$name permission"
-                setOnClickListener {
-                    isChecked = permissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
-                    if (isChecked) permissionSettings(name) else requestFeaturePermissions(permissions, code, name)
-                }
-            }
-            row.addView(label, LinearLayout.LayoutParams(0, -2, 1f))
-            row.addView(toggle)
-            layout.addView(row)
-            permissionSwitches[name] = toggle
-        }
-        val note = TextView(this).apply {
-            setText(R.string.permission_settings_note)
-            setTextColor(Palette.MUTED); textSize = 13f
-        }
-        layout.addView(note)
-        permissionDialog = AlertDialog.Builder(this).setTitle("Permissions").setView(layout)
-            .setPositiveButton("Done", null).create().also { it.show() }
-    }
-    private fun refreshPermissions() {
-        val names = mapOf(
-            "Nearby devices" to if (Build.VERSION.SDK_INT >= 31) bluetoothPermissions() else emptyArray(),
-            "Precise location" to arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
-            "Notifications" to if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray(),
-        )
-        permissionSwitches.forEach { (name, toggle) ->
-            toggle.isChecked = names[name].orEmpty().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
-        }
     }
     private fun requestAppUpdate(requestedOrigin: String = origin) = Distribution.requestUpdate(this, requestedOrigin)
     private var discovery: LanDiscovery? = null
@@ -642,7 +653,7 @@ class MainActivity : Activity() {
         val padding = (24 * resources.displayMetrics.density).toInt()
         val container = LinearLayout(this).apply { setPadding(padding, 0, padding, 0); addView(field, LinearLayout.LayoutParams(-1, -2)) }
         AlertDialog.Builder(this).setTitle("Connect with Galaxy App key")
-            .setMessage("On StarPilot, open Galaxy → Access, copy the App key, and paste it here. Or choose Sign in with Galaxy ID in Connections.")
+            .setMessage("On StarPilot, open Galaxy → Access, copy the App key, and paste it here. Or choose Sign in with Galaxy ID under Remote access in Connections.")
             .setView(container).setPositiveButton("Connect") { _, _ -> acceptRemoteKey(field.text.toString()) }
             .setNegativeButton("Cancel", null).show()
     }
@@ -807,7 +818,7 @@ class MainActivity : Activity() {
             s.route(Route.HOME_NETWORK, RouteState.TRYING, "Searching…")
             s.detail(if (quickBluetoothFallback) "Checking this Wi-Fi for StarPilot before trying Bluetooth."
                 else "Looking for StarPilot on this Wi-Fi network. This takes up to 12 seconds.")
-        } else Toast.makeText(this, "Looking for StarPilot on LAN…", Toast.LENGTH_LONG).show()
+        } else showNotice("Looking for StarPilot on LAN…")
         search.start()
     }
     /** How comma lists this phone under Settings → Bluetooth, e.g. "Danny's Pixel 8". */
@@ -1045,7 +1056,8 @@ class MainActivity : Activity() {
         if (isFinishing || isDestroyed || pairing.audioAddress() == null || pairing.musicAddress() != null) return
         AlertDialog.Builder(this, R.style.AppDialog)
             .setTitle("Pair for music too?")
-            .setMessage("$done Pair StarPilot as this phone's Bluetooth audio device to play music. You can do this later from the menu (Set up music only).")
+            .setView(completionCheck(done))
+            .setMessage("Pair StarPilot as this phone's Bluetooth audio device to play music. You can do this later from Connections (Set up music only).")
             .setPositiveButton("Pair music now") { _, _ -> startMusicOnly() }
             .setNegativeButton("Later", null)
             .show()
@@ -1264,7 +1276,6 @@ class MainActivity : Activity() {
         if (code in 21..23 && results.any { it != PackageManager.PERMISSION_GRANTED }) {
             permissionDenied(permissions, when (code) { 21 -> "Nearby devices"; 22 -> "Precise location"; else -> "Notifications" })
         }
-        refreshPermissions()
     }
     private fun showBluetooth(transport: BleTransport) {
         bluetoothMode = true
@@ -1399,7 +1410,6 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume(); resumed = true; if (demoSession != null) return; recovery.resumed(); GalaxyUpdates.checkAsync(this) {}; Distribution.checkAsync(this); checkMusicBond()
         Distribution.resume(this)
-        refreshPermissions()
     }
     override fun onPause() { resumed = false; super.onPause() }
     override fun onStop() {

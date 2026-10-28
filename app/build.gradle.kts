@@ -1,7 +1,9 @@
 plugins { id("com.android.application") }
 
 val firebaseEnabled = file("google-services.json").exists()
-val aaSignerSha256 = System.getenv("AA_COMPANION_CERT_SHA256")?.uppercase().orEmpty()
+// Google Play app signing certificate of com.starpilot.auto (verified from the installed Play APK).
+val playAaSignerSha256 = "13AE59E1A17F956D77E46F6E10C23913CBE47291164ECB43C5D9F107B157319A"
+val aaSignerSha256 = (System.getenv("AA_COMPANION_CERT_SHA256") ?: playAaSignerSha256).uppercase()
 require(aaSignerSha256.isEmpty() || aaSignerSha256.matches(Regex("[0-9A-F]{64}")))
 if (firebaseEnabled) apply(plugin = "com.google.gms.google-services")
 
@@ -12,9 +14,8 @@ android {
         applicationId = "link.firestar.companion"
         minSdk = 26
         targetSdk = 36
-        versionCode = 34
-        versionName = "7.0.0.0"
-        buildConfigField("String", "AA_COMPANION_CERT_SHA256", "\"$aaSignerSha256\"")
+        versionCode = 39
+        versionName = "7.0.0.4"
     }
     signingConfigs {
         create("upload") {
@@ -38,6 +39,7 @@ android {
             applicationId = "link.firestar.companion"
             resValue("string", "app_name", "Galaxy")
             buildConfigField("String", "DISTRIBUTION", "\"direct\"")
+            buildConfigField("String", "AA_COMPANION_CERT_SHA256", "\"\"")
             signingConfig = signingConfigs.getByName("companion")
         }
         create("play") {
@@ -46,6 +48,7 @@ android {
             applicationId = "com.starpilot.galaxy"
             resValue("string", "app_name", "Galaxy")
             buildConfigField("String", "DISTRIBUTION", "\"play\"")
+            buildConfigField("String", "AA_COMPANION_CERT_SHA256", "\"$aaSignerSha256\"")
             if (System.getenv("COMPANION_UPLOAD_KEY_PASSWORD") != null) signingConfig = signingConfigs.getByName("upload")
         }
     }
