@@ -1,6 +1,8 @@
-﻿plugins { id("com.android.application") }
+plugins { id("com.android.application") }
 
-val primarySignerSha256 = System.getenv("AA_PRIMARY_CERT_SHA256")?.uppercase().orEmpty()
+// Google Play app signing certificate of com.starpilot.galaxy (verified from the installed Play APK).
+val playPrimarySignerSha256 = "7E2DF51AD6C0CB8FD25F10C829BBDB60D3DF2771E36763D0D750E0601A852685"
+val primarySignerSha256 = (System.getenv("AA_PRIMARY_CERT_SHA256") ?: playPrimarySignerSha256).uppercase()
 require(primarySignerSha256.isEmpty() || primarySignerSha256.matches(Regex("[0-9A-F]{64}")))
 
 android {
@@ -10,8 +12,8 @@ android {
         applicationId = "com.starpilot.auto"
         minSdk = 26
         targetSdk = 36
-        versionCode = 37
-        versionName = "7.0.0.0"
+        versionCode = 39
+        versionName = "7.0.0.4"
         buildConfigField("String", "PRIMARY_SIGNER_SHA256", "\"$primarySignerSha256\"")
     }
     signingConfigs {
