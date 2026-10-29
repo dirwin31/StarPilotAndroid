@@ -57,11 +57,13 @@ android {
         sourceSets.getByName("play").manifest.srcFile("src/firebase/AndroidManifest.xml")
     }
     buildFeatures { buildConfig = true; resValues = true }
+    testOptions { unitTests.isIncludeAndroidResources = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("com.google.code.gson:gson:2.11.0") { isTransitive = false }
     if (firebaseEnabled) {
         implementation(platform("com.google.firebase:firebase-bom:34.4.0"))

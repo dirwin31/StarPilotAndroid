@@ -18,6 +18,16 @@ The Direct build script signs with the existing companion key. The Play bundle r
 
 Refresh the bundled web snapshot using `tools/snapshot_galaxy_web.sh /path/to/openpilot`. `tools/capture_demo_fixtures.py` optionally refreshes the allowlisted fixtures over LAN and scrubs private values; review the resulting schemas and rerun the fixture tests before committing. The checked-in fixtures are synthetic and require no device capture.
 
+Android Auto setup supports downloading in the phone's browser and selecting the
+downloaded APK, XAPK, APKM or ZIP through Android's document picker in both
+editions, over Wi-Fi/LAN or Remote. The picker includes all file types because
+XAPK/APKM MIME types vary; Galaxy validates the package before uploading it.
+No storage permission is needed. Bluetooth remains controls only. Device check:
+open Android Auto setup, download a package (including the APKMirror fallback),
+return to Galaxy, choose it from Downloads and upload it to comma. Also cancel
+and reopen the picker and switch connections while it is open; neither should
+leave a pending selection or deliver a file to the previous page.
+
 Distribution uses `./starpilot upstream-pr` from the private Android repository.
 It copies only a published Direct APK and its version into a StarPilot PR.
 Do not use whole-repository subtree imports: they can expose private Trail history.

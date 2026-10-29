@@ -14,6 +14,7 @@ import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.LinkProperties
@@ -37,6 +38,7 @@ import java.net.Inet4Address
 
 class MainActivity : Activity() {
     @Volatile private var web: WebView? = null
+    private val filePicker by lazy { GalaxyFilePicker(this, { web === it }, ::message) }
     private var ble: BleTransport? = null
     private val connectionGeneration = AtomicInteger()
     @Volatile private var bluetoothMode = false
@@ -164,6 +166,7 @@ class MainActivity : Activity() {
         bluetoothMode = false
         bluetoothAttemptAutomatic = false
         clearWatchdog()
+        filePicker.cancel()
         val previous = web; web = null
         previous?.removeJavascriptInterface("StarPilotApp"); previous?.stopLoading(); previous?.destroy()
         Networks.manager(this).bindProcessToNetwork(null)
@@ -213,10 +216,13 @@ class MainActivity : Activity() {
         view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
         view.addJavascriptInterface(Bridge(), "StarPilotApp")
+        configureFiles(view)
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
                 // No external document (including frames) ever receives the bridge.
-                return Networks.localOrigin(request.url.toString()) != origin
+                if (Networks.localOrigin(request.url.toString()) == origin) return false
+                openExternalLink(v, request)
+                return true
             }
             override fun shouldInterceptRequest(v: WebView, request: WebResourceRequest): WebResourceResponse? {
                 if (Networks.localOrigin(request.url.toString()) == origin) return null
@@ -237,12 +243,6 @@ class MainActivity : Activity() {
                     autoPairIfNeeded()
                 }
             }
-        }
-        view.setDownloadListener { url, _, _, _, _ ->
-            val uri = Uri.parse(url)
-            if (Networks.localOrigin(url) == origin && uri.path in setOf("/app.apk", "/api/companion/app.apk")) {
-                runOnUiThread { requestAppUpdate() }
-            } else if (Networks.localOrigin(url) == origin) startActivity(Intent(Intent.ACTION_VIEW, uri))
         }
         showWeb(view, route, if (route == Route.GALAXY_WIFI) "Galaxy Wi-Fi" else "Home network, ${address(origin)}", waitForPage = true)
         // A comma that vanished mid-load can leave the page pending for a long time.
@@ -282,6 +282,36 @@ class MainActivity : Activity() {
         }, "GalaxyProbe").start()
     }
     private fun address(origin: String) = origin.removePrefix("http://").removeSuffix(":8082")
+    private fun configureFiles(view: WebView) {
+        view.webChromeClient = filePicker
+        // target="_blank" follows the same navigation policy as ordinary links.
+        view.settings.setSupportMultipleWindows(false)
+        view.setDownloadListener { url, _, _, _, _ ->
+            if (web === view) {
+                val local = Networks.localOrigin(url) == origin
+                if (local && Uri.parse(url).path in setOf("/app.apk", "/api/companion/app.apk")) requestAppUpdate()
+                else if (local || GalaxyLinks.external(url)) openBrowser(Uri.parse(url))
+            }
+        }
+    }
+    private fun openExternalLink(view: WebView, request: WebResourceRequest) {
+        if (web === view && request.isForMainFrame && request.hasGesture() && request.method == "GET" && GalaxyLinks.external(request.url.toString())) {
+            openBrowser(request.url)
+        }
+    }
+    private fun openBrowser(uri: Uri) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+        } catch (_: ActivityNotFoundException) {
+            message("No browser is available. Enable a browser to download the file, then return to Galaxy to choose it.")
+        } catch (_: SecurityException) {
+            message("The browser couldn't open this link. Download the file in your browser, then return to Galaxy to choose it.")
+        }
+    }
+    @Deprecated("Activity result API for the platform file picker")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (!filePicker.result(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data)
+    }
     private fun clearWatchdog() { pageWatchdog?.let { handler.removeCallbacks(it) }; pageWatchdog = null }
     private fun pageFailed(v: WebView) {
         if (web !== v) return
@@ -729,8 +759,13 @@ class MainActivity : Activity() {
         view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
         view.addJavascriptInterface(RemoteBridge(), "StarPilotApp")
+        configureFiles(view)
         view.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest) = !Networks.tunnelOrigin(request.url.toString(), credential.slug)
+            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                if (Networks.tunnelOrigin(request.url.toString(), credential.slug)) return false
+                openExternalLink(v, request)
+                return true
+            }
             override fun shouldInterceptRequest(v: WebView, request: WebResourceRequest): WebResourceResponse? =
                 if (Networks.tunnelOrigin(request.url.toString(), credential.slug)) null else WebResourceResponse("text/plain", "UTF-8", 403, "Denied", emptyMap(), ByteArrayInputStream(byteArrayOf()))
             override fun onPageFinished(v: WebView, url: String) { if (web === v && Networks.tunnelOrigin(url, credential.slug)) { installVibrationBridge(v); revealWeb(); connectedSentry() } }
@@ -1425,6 +1460,6 @@ class MainActivity : Activity() {
         runCatching { Networks.manager(this).unregisterNetworkCallback(defaultWatcher) }
         runCatching { unregisterReceiver(bondWatcher) }
         connectionGeneration.incrementAndGet(); ble?.close(); worker.shutdownNow()
-        web?.destroy(); Networks.manager(this).bindProcessToNetwork(null); super.onDestroy()
+        filePicker.cancel(); web?.destroy(); Networks.manager(this).bindProcessToNetwork(null); super.onDestroy()
     }
 }
