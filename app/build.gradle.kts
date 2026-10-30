@@ -12,8 +12,8 @@ android {
         applicationId = "com.starpilot.auto"
         minSdk = 26
         targetSdk = 36
-        versionCode = 39
-        versionName = "7.0.0.4"
+        versionCode = 40
+        versionName = "7.0.0.5"
         buildConfigField("String", "PRIMARY_SIGNER_SHA256", "\"$primarySignerSha256\"")
     }
     signingConfigs {

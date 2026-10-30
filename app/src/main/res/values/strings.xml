@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Galaxy: AA</string>
-    <string name="review_subtitle">Android Auto companion</string>
+    <string name="review_subtitle">Android Auto Plugin</string>
     <string name="review_connection_heading">Galaxy connection</string>
     <string name="review_checking">Checking…</string>
     <string name="review_checking_detail">Verifying the secure bridge</string>
