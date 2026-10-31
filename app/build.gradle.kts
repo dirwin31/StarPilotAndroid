@@ -1,17 +1,21 @@
 plugins { id("com.android.application") }
 
 val firebaseEnabled = file("google-services.json").exists()
+// Google Play app signing certificate of com.starpilot.auto (verified from the installed Play APK).
+val playAaSignerSha256 = "13AE59E1A17F956D77E46F6E10C23913CBE47291164ECB43C5D9F107B157319A"
+val aaSignerSha256 = (System.getenv("AA_COMPANION_CERT_SHA256") ?: playAaSignerSha256).uppercase()
+require(aaSignerSha256.isEmpty() || aaSignerSha256.matches(Regex("[0-9A-F]{64}")))
 if (firebaseEnabled) apply(plugin = "com.google.gms.google-services")
 
 android {
-    namespace = "link.firestar.companion"
+    namespace = "com.starpilot.galaxy"
     compileSdk = 37
     defaultConfig {
         applicationId = "link.firestar.companion"
         minSdk = 26
         targetSdk = 36
-        versionCode = 33
-        versionName = "1.2.0"
+        versionCode = 39
+        versionName = "7.0.0.4"
     }
     signingConfigs {
         create("upload") {
@@ -31,16 +35,20 @@ android {
     productFlavors {
         create("direct") {
             dimension = "distribution"
+            manifestPlaceholders["aaBridgeEnabled"] = "false"
             applicationId = "link.firestar.companion"
-            resValue("string", "app_name", "Galaxy Direct")
+            resValue("string", "app_name", "Galaxy")
             buildConfigField("String", "DISTRIBUTION", "\"direct\"")
+            buildConfigField("String", "AA_COMPANION_CERT_SHA256", "\"\"")
             signingConfig = signingConfigs.getByName("companion")
         }
         create("play") {
             dimension = "distribution"
-            applicationId = "link.firestar.galaxy"
+            manifestPlaceholders["aaBridgeEnabled"] = "true"
+            applicationId = "com.starpilot.galaxy"
             resValue("string", "app_name", "Galaxy")
             buildConfigField("String", "DISTRIBUTION", "\"play\"")
+            buildConfigField("String", "AA_COMPANION_CERT_SHA256", "\"$aaSignerSha256\"")
             if (System.getenv("COMPANION_UPLOAD_KEY_PASSWORD") != null) signingConfig = signingConfigs.getByName("upload")
         }
     }

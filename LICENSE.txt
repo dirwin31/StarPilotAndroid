@@ -1,0 +1,58 @@
+Galaxy for Android — Proprietary Terms
+
+Copyright (c) 2026 the respective Galaxy for Android contributors.
+All rights reserved, except as expressly stated below.
+
+This project is proprietary software. Making its source available does not
+make it open-source software or grant a general right to redistribute it.
+These terms apply to original project material to the extent its copyright
+holders have authority to license it.
+
+1. Review and contributions
+
+You may inspect the source and make local copies, modifications, and builds
+solely to evaluate the project, test changes, and submit contributions to this
+repository. You may use GitHub's viewing, forking, and pull-request features
+as permitted by GitHub's Terms of Service. Retain applicable copyright and
+license notices in those copies.
+
+2. Distribution restrictions
+
+Except for the permissions above, rights required by applicable law, or prior
+written permission from the applicable copyright holders, you may not publish,
+redistribute, sell, sublicense, or otherwise provide the project's source,
+assets, or compiled builds to others. This includes modified, derivative,
+rebranded, and renamed versions, whether provided free of charge or for payment.
+
+You may not upload or publish builds to Google Play, the Apple App Store,
+Amazon Appstore, F-Droid, or any other app store, marketplace, download site,
+or package repository without that written permission. Permission to submit
+a pull request is not permission to distribute builds or operate a store listing.
+Official releases may be distributed by the copyright holders and their
+expressly authorized distributors.
+
+3. Contributions
+
+Pull requests are welcome. By intentionally submitting a contribution for
+inclusion, you confirm that you have the right to submit it and grant the
+project's maintainers a perpetual, worldwide, non-exclusive, royalty-free,
+irrevocable copyright license to use, reproduce, modify, distribute, and
+sublicense that contribution as part of this project and its official releases,
+including proprietary releases. You retain ownership of your contribution.
+Identify any third-party material and its license in your submission; do not
+submit material whose terms conflict with these permissions.
+
+4. Third-party material and existing rights
+
+Third-party components remain subject to their own licenses. These terms do
+not replace or restrict rights granted under those licenses or any valid prior
+license grant. See LICENSE.gradle for the preserved Gradle-related license
+text and component inventory, and app/src/main/assets/demo/web/vendor/notices/
+for bundled web dependency notices. Those notices do not license the original
+project as a whole under their terms.
+
+5. Warranty
+
+TO THE EXTENT PERMITTED BY LAW, THE SOFTWARE IS PROVIDED "AS IS", WITHOUT
+WARRANTY OF ANY KIND. THE COPYRIGHT HOLDERS ARE NOT LIABLE FOR CLAIMS OR
+DAMAGES ARISING FROM ITS USE.

@@ -262,7 +262,7 @@ export const SettingsPage = {
     initialSection: { type: String, default: null }, returnTo: { type: Function, default: null }
   },
   setup(props) {
-    const state = reactive({ status: "idle", data: null, pending: null, error: "", query: "", searchOpen: false, section: "lateral", layoutOpen: false, layoutPanel: "widgets", favoritesOpen: false, soundChoicesDirty: false, parents: [], developerOpen: props.initialSection === "developer", panelDirection: 1 })
+    const state = reactive({ status: "idle", data: null, pending: null, error: "", aaCompanion: null, query: "", searchOpen: false, section: "lateral", layoutOpen: false, layoutPanel: "widgets", favoritesOpen: false, soundChoicesDirty: false, parents: [], developerOpen: props.initialSection === "developer", panelDirection: 1 })
     const feed = new SettingsFeed({ publish: (update) => Object.assign(state, update), unauthorized: props.unauthorized })
     return { state, feed, sections: SETTINGS_SECTIONS }
   },
@@ -304,9 +304,17 @@ export const SettingsPage = {
       else this.flushSoundChoices()
     },
   },
-  mounted() { if (this.mode === "local") this.feed.start(this.state.developerOpen ? "developer" : this.initialPage) },
-  beforeUnmount() { this.feed.stop() },
+  mounted() {
+    if (this.mode === "local") this.feed.start(this.state.developerOpen ? "developer" : this.initialPage)
+    this.refreshAaCompanion()
+    this.aaCompanionTimer = setInterval(() => this.refreshAaCompanion(), 5000)
+  },
+  beforeUnmount() { clearInterval(this.aaCompanionTimer); this.feed.stop() },
   methods: {
+    refreshAaCompanion() {
+      try { this.state.aaCompanion = JSON.parse(window.StarPilotApp?.androidAutoCompanionStatus?.() || 'null') }
+      catch { this.state.aaCompanion = null }
+    },
     open(page) {
       if (this.busy) return
       this.$emit?.("nested")
@@ -436,6 +444,16 @@ export const SettingsPage = {
               <GalaxySettingRow v-for="{ row, index } in visibleRows" :key="rowKey(row, index)" :row="row" :index="index"
                 :busy="busy" :disabled="!!state.error || !row.available" :save-value="(index, value) => feed.previewValue(index, value)"
                 @open="open" @review="(index, direction) => feed.preview(index, direction)" @reset-default="index => feed.resetDefault(index)" />
+              <div v-if="state.data.page === 'hub' && activeSection.id === 'device'" class="gx-settings__row" role="status">
+                <div><h4>Android Auto companion</h4>
+                  <p class="gx-note" v-if="!state.aaCompanion">Open this page in the Galaxy phone app to check the companion.</p>
+                  <p class="gx-note" v-else-if="!state.aaCompanion.installed">Install the separate Galaxy Auto app on this phone.</p>
+                  <p class="gx-note" v-else-if="!state.aaCompanion.compatible">Update Galaxy Auto to a compatible version.</p>
+                  <p class="gx-note" v-else-if="!state.aaCompanion.trusted">The companion's signing identity is not approved for this Galaxy build.</p>
+                  <p class="gx-note" v-else>{{ state.aaCompanion.connected ? 'Connected recently to this Galaxy app.' : 'Installed and ready. Open Galaxy Auto on your car display to connect.' }}</p>
+                </div>
+                <label class="gx-cluster"><input type="checkbox" :checked="!!state.aaCompanion?.connected" disabled aria-label="Android Auto companion connected"> Connected</label>
+              </div>
               <div v-if="!visibleRows.length" class="gx-empty">No matching settings.</div>
             </section>
             <SoundPacks v-if="state.data.page === 'sounds'" :unauthorized="unauthorized" :busy="busy" @installed="refreshSoundChoices" />

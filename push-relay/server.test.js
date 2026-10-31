@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer, memoryRate } from './server.js'
-const body = { token: 'private-token', appId: 'link.firestar.galaxy', kind: 'warning', eventId: 'abc', wallTimeNs: 1000000000, label: 'Phone' }
+const body = { token: 'private-token', appId: 'com.starpilot.galaxy', kind: 'warning', eventId: 'abc', wallTimeNs: 1000000000, label: 'Phone' }
 async function listen(env, fetcher) {
   const server = createServer(env, fetcher, async () => 'oauth')
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))

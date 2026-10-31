@@ -5,7 +5,7 @@ The app works without Firebase or a relay: enabled alerts use polling while conn
 ## Firebase
 
 1. Create a Firebase project on the Spark plan, without Analytics.
-2. Register both Android IDs: `link.firestar.companion` and `link.firestar.galaxy`.
+2. Register both Android IDs: `link.firestar.companion` and `com.starpilot.galaxy`.
 3. Download the project's `google-services.json` with both clients and put it in `app/`. This config is not a secret; commit it. Both flavors automatically include Messaging when the file exists. Without it they compile the polling implementation.
 4. Enable Firebase Cloud Messaging API (V1) in Google Cloud.
 5. Create a service account named `galaxy-push-relay` with **Firebase Cloud Messaging API Admin**. Create a JSON key. Keep that key private: never commit it or share it.
@@ -44,7 +44,7 @@ read -r FCM_TEST_TOKEN
 export FCM_TEST_TOKEN
 python3 - <<'PY' | curl --fail-with-body -H 'Content-Type: application/json' --data-binary @- https://push.firestar.link/v1/sentry
 import json, os, time, uuid
-print(json.dumps({'token': os.environ['FCM_TEST_TOKEN'], 'appId': 'link.firestar.galaxy', 'kind': 'test', 'eventId': uuid.uuid4().hex, 'wallTimeNs': time.time_ns(), 'label': 'Relay test'}))
+print(json.dumps({'token': os.environ['FCM_TEST_TOKEN'], 'appId': 'com.starpilot.galaxy', 'kind': 'test', 'eventId': uuid.uuid4().hex, 'wallTimeNs': time.time_ns(), 'label': 'Relay test'}))
 PY
 unset FCM_TEST_TOKEN
 ```
@@ -62,7 +62,7 @@ In Galaxy → Sentry, enable this phone, use Test, and check the delivery result
 
 ## Play release
 
-Confirm `link.firestar.galaxy` before the first upload. Create the upload key yourself with:
+Confirm `com.starpilot.galaxy` before the first upload. Create the upload key yourself with:
 
 ```sh
 keytool -genkeypair -alias upload -keyalg RSA -keysize 4096 -validity 10000 -keystore ~/.starpilot/companion-upload.jks

@@ -1,6 +1,6 @@
 # Galaxy Android release handoff
 
-The Direct and Play apps share this repository. Direct keeps `link.firestar.companion`, its existing signing key and pairing storage; Play uses `link.firestar.galaxy`. Both target SDK 36. The default landing page is Galaxy Home. Remote keys are encrypted, verified before saving, and exposed only through authenticated Galaxy routes. Automatic connections prefer Wi-Fi/LAN, Remote, then Bluetooth. Demo assets are a bundled snapshot, with synthetic fixtures and no real networking.
+The Direct and Play apps share this repository. Direct keeps `link.firestar.companion`, its existing signing key and pairing storage; Play uses `com.starpilot.galaxy`. Both target SDK 36. The default landing page is Galaxy Home. Remote keys are encrypted, verified before saving, and exposed only through authenticated Galaxy routes. Automatic connections prefer Wi-Fi/LAN, Remote, then Bluetooth. Demo assets are a bundled snapshot, with synthetic fixtures and no real networking.
 
 `push-relay/SETUP.md` covers Firebase, the VPS relay, upload-key creation, Play Console declarations and physical verification. No Firebase config is checked in until it is supplied; polling works meanwhile. Do not upload the Play application before confirming its permanent ID.
 
