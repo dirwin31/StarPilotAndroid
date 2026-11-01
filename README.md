@@ -8,6 +8,8 @@ Application ID: `com.starpilot.galaxy`.
 **Proprietary software — not open source. Pull requests are welcome.** You may
 review the source, fork it on GitHub, and build or modify it locally to evaluate
 changes and contribute back to this repository, under [the proprietary terms](LICENSE.txt).
+You may also install, use, back up, and update official releases for personal
+or internal business use, as described in those terms.
 
 **Redistributing the source or builds, or publishing builds to any app store,
 is not allowed without prior written permission from the applicable copyright
@@ -15,11 +17,36 @@ holders.** This includes free, paid, modified, and renamed versions, and uploads
 to Google Play, the Apple App Store, F-Droid, or other distribution services.
 GitHub viewing/forking rights and third-party license rights remain unaffected.
 Official releases are published by the project or its authorized distributors.
+Collaborators personally added or expressly approved by dirwin31 have standing
+permission to publish official releases through approved project channels,
+subject to release instructions and existing approval controls. Separate license
+approval for each release is not required. This includes current collaborators
+such as [prabhaavp](https://github.com/prabhaavp) while their appointment remains
+in effect. dirwin31 can restrict or
+withdraw this permission; it does not authorize unofficial forks or store listings.
+
+The [StarPilot continuity license](LICENSE.starpilot-team.md) keeps final release
+and distribution authority with dirwin31. Firestar5683 and designated successors
+may take over through a written handoff, or after six months of project inactivity
+followed by three unanswered DMs at least 15 days apart and a further 14-day
+response period, with a documented maintenance, support, or distribution need.
+A stable app does not require periodic updates: confirming continued support or
+that no update is needed counts as activity. Any reply stops activation. Existing
+contributors can continue contributing without a handoff. After an inactivity
+handoff, written notice of the maintainer's return restores their authority over
+new releases. See the license for the full conditions and existing-release rights.
+The license covers only authorized material and does not permit public unofficial
+releases. Signing-key and store-account access remain separate arrangements.
 
 By submitting a PR, you agree to the contribution terms in [LICENSE.txt](LICENSE.txt),
 which allow maintainers to incorporate and distribute your contribution in official
 proprietary releases; you retain ownership of your contribution. Identify any
 third-party code and its license in your PR.
+For new contributions under these terms, the grant also permits sublicensing
+to appointed collaborators, the StarPilot Team, and its successors under the
+separate license.
+For earlier contributions, the [existing-contribution agreement](CONTRIBUTOR-AGREEMENT.md)
+provides an explicit grant covering official proprietary releases and continuity.
 
 [Gradle-related notices](LICENSE.gradle) and [bundled web dependency notices](app/src/main/assets/demo/web/vendor/notices/)
 are preserved separately and do not provide an open-source license for the app.

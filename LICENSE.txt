@@ -16,6 +16,17 @@ repository. You may use GitHub's viewing, forking, and pull-request features
 as permitted by GitHub's Terms of Service. Retain applicable copyright and
 license notices in those copies.
 
+Official-release use
+
+You may download, install, run, and update official releases obtained from the
+project or its authorized distributors, for personal or internal business use.
+You may make backup copies and install those releases on devices you own or
+are authorized to administer for those purposes. This permission is worldwide,
+non-exclusive, and royalty-free under these terms; any stated purchase price
+or separate service charges still apply. It does not permit public hosting,
+resale, redistribution to others, or publishing your own app-store listing.
+Applicable third-party terms and rights required by law remain unaffected.
+
 2. Distribution restrictions
 
 Except for the permissions above, rights required by applicable law, or prior
@@ -31,6 +42,15 @@ a pull request is not permission to distribute builds or operate a store listing
 Official releases may be distributed by the copyright holders and their
 expressly authorized distributors.
 
+The separate LICENSE.starpilot-team.md provides a continuity-license agreement
+for appointed collaborators and the identified StarPilot Team to maintain,
+update, and distribute the
+official app even after an individual maintainer steps away or becomes
+unavailable. Its permissions apply only to the material and recipients covered
+by an effective grant under that agreement, subject to its maintainer-approval
+conditions, its standing permission for appointed collaborators, and its
+continuity-activation conditions, not to the public generally.
+
 3. Contributions
 
 Pull requests are welcome. By intentionally submitting a contribution for
@@ -38,9 +58,20 @@ inclusion, you confirm that you have the right to submit it and grant the
 project's maintainers a perpetual, worldwide, non-exclusive, royalty-free,
 irrevocable copyright license to use, reproduce, modify, distribute, and
 sublicense that contribution as part of this project and its official releases,
-including proprietary releases. You retain ownership of your contribution.
+including proprietary releases. Official release and distribution authority
+remains subject to the Primary Maintainer control and handoff conditions in
+section 3 of LICENSE.starpilot-team.md; this contribution grant does not bypass
+those conditions. You retain ownership of your contribution.
+For contributions intentionally submitted after these terms are adopted, this
+grant also expressly permits maintainers to sublicense the contribution under
+LICENSE.starpilot-team.md to its Authorized Collaborators, identified Team, and
+duly appointed successors for official releases and official-app continuity. This does not retroactively change earlier grants.
 Identify any third-party material and its license in your submission; do not
 submit material whose terms conflict with these permissions.
+
+Existing contributions may be covered by an express grant under
+CONTRIBUTOR-AGREEMENT.md. Contributor status, repository access, silence, or
+publication of these terms does not by itself establish that earlier grant.
 
 4. Third-party material and existing rights
 

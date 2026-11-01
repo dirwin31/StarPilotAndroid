@@ -223,6 +223,7 @@ class ConnectScreen(private val activity: Activity, private val onRoute: (Route)
         panel.addView(links, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(6) })
 
         panel.addView(footer, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(18) })
+        panel.addView(link(activity.getString(R.string.about_galaxy)) { GalaxyAbout.showAbout(activity) }, LinearLayout.LayoutParams(-1, -2))
 
         view = ScrollView(activity).apply {
             isFillViewport = true; setBackgroundColor(Palette.SPACE); clipToPadding = false
