@@ -5,51 +5,35 @@ Application ID: `com.starpilot.galaxy`.
 
 ## License and contributions
 
-**Proprietary software — not open source. Pull requests are welcome.** You may
+**Source available under proprietary terms—not an open-source license.** You may
 review the source, fork it on GitHub, and build or modify it locally to evaluate
-changes and contribute back to this repository, under [the proprietary terms](LICENSE.txt).
-You may also install, use, back up, and update official releases for personal
-or internal business use, as described in those terms.
+changes and contribute back. You may install, use, back up, and update official
+releases for personal or internal business use. Permission to modify or build the
+source is limited to evaluation, testing, and contributing changes; it does not
+permit ongoing personal or business use of modified builds. For ordinary use,
+use an official release. Authorized maintainer and collaborator permissions and
+other rights preserved by [LICENSE.txt](LICENSE.txt) remain unaffected.
 
-**Redistributing the source or builds, or publishing builds to any app store,
-is not allowed without prior written permission from the applicable copyright
-holders.** This includes free, paid, modified, and renamed versions, and uploads
-to Google Play, the Apple App Store, F-Droid, or other distribution services.
-GitHub viewing/forking rights and third-party license rights remain unaffected.
-Official releases are published by the project or its authorized distributors.
-Collaborators personally added or expressly approved by dirwin31 have standing
-permission to publish official releases through approved project channels,
-subject to release instructions and existing approval controls. Separate license
-approval for each release is not required. This includes current collaborators
-such as [prabhaavp](https://github.com/prabhaavp) while their appointment remains
-in effect. dirwin31 can restrict or
-withdraw this permission; it does not authorize unofficial forks or store listings.
+Redistribution and unofficial app-store publishing require permission from the
+applicable copyright holders. This includes free, paid, modified, and renamed
+versions. GitHub viewing/forking permissions, third-party licenses, and valid
+prior license grants remain unaffected.
 
-The [StarPilot continuity license](LICENSE.starpilot-team.md) keeps final release
-and distribution authority with dirwin31. Firestar5683 and designated successors
-may take over through a written handoff, or after six months of project inactivity
-followed by three unanswered DMs at least 15 days apart and a further 14-day
-response period, with a documented maintenance, support, or distribution need.
-A stable app does not require periodic updates: confirming continued support or
-that no update is needed counts as activity. Any reply stops activation. Existing
-contributors can continue contributing without a handoff. After an inactivity
-handoff, written notice of the maintainer's return restores their authority over
-new releases. See the license for the full conditions and existing-release rights.
-The license covers only authorized material and does not permit public unofficial
-releases. Signing-key and store-account access remain separate arrangements.
+Official releases are published by authorized maintainers. The
+[project licensing terms](LICENSE.starpilot-team.md) describe release permissions
+and arrangements for continued maintenance. Forking the source does not grant
+permission to distribute builds or publish an unofficial app-store listing.
 
-By submitting a PR, you agree to the contribution terms in [LICENSE.txt](LICENSE.txt),
-which allow maintainers to incorporate and distribute your contribution in official
-proprietary releases; you retain ownership of your contribution. Identify any
-third-party code and its license in your PR.
-For new contributions under these terms, the grant also permits sublicensing
-to appointed collaborators, the StarPilot Team, and its successors under the
-separate license.
-For earlier contributions, the [existing-contribution agreement](CONTRIBUTOR-AGREEMENT.md)
-provides an explicit grant covering official proprietary releases and continuity.
+**Pull requests are welcome.** Submit changes against `Play-Dev`. New contributions
+are subject to the contribution terms in [LICENSE.txt](LICENSE.txt), including
+official proprietary releases and authorized sublicensing; contributors retain
+ownership. Identify any third-party material and its license in your PR.
+The [existing-contribution agreement](CONTRIBUTOR-AGREEMENT.md) provides a way for
+holders to expressly cover earlier contributions; it requires their acceptance.
 
-[Gradle-related notices](LICENSE.gradle) and [bundled web dependency notices](app/src/main/assets/demo/web/vendor/notices/)
-are preserved separately and do not provide an open-source license for the app.
+[Gradle-related notices](LICENSE.gradle) and
+[bundled web dependency notices](app/src/main/assets/demo/web/vendor/notices/)
+remain applicable to their respective components.
 
 ## Contents
 
@@ -58,8 +42,6 @@ are preserved separately and do not provide an open-source license for the app.
 - [Set up](#set-up)
 - [Test and build locally](#test-and-build-locally)
 - [Promote a release](#promote-a-release)
-- [Publish to Play](#publish-to-play)
-- [Release configuration](#release-configuration)
 
 ## Branches and shared code
 
@@ -71,20 +53,26 @@ are preserved separately and do not provide an open-source license for the app.
 Shared screens, connections and fixes belong in `app/src/main`. Play-specific
 code and permissions belong in `app/src/play`, behind `AppDistribution`.
 
-The old `main` and `play-store` branches are retained for history.
-
 ## Set up
 
-Install Git, Python 3 and GitHub CLI for repository tooling and pull requests.
+Install Git, Python 3, and Node.js for the repository tools and tests. GitHub CLI
+is used by the PR and release commands below; it is not required to clone public
+source or run local builds.
 
 ```sh
-gh auth login --hostname github.com
-gh repo clone dirwin31/StarPilotAndroid
+git clone https://github.com/dirwin31/StarPilotAndroid.git
 cd StarPilotAndroid
+git switch Play-Dev
 ```
 
 Local Android builds also need JDK 17, Android SDK platform `android-37.0` and
-build tools `37.0.0`. The app targets SDK 36.
+build tools `37.0.0`. Set `JAVA_HOME` to your JDK and `ANDROID_HOME` to your SDK,
+or configure `sdk.dir` in an untracked `local.properties`. The app targets SDK 36.
+Official signing credentials are not needed for debug tests or unsigned Play builds.
+
+To contribute without repository write access, fork the repository and open a PR
+from your fork into `Play-Dev`. Authenticate with `gh auth login` when using
+GitHub CLI commands that require your account.
 
 ## Test and build locally
 
@@ -109,7 +97,8 @@ node tests/test_demo_fixtures.mjs
 ```
 
 The Play bundle remains unsigned unless upload credentials are supplied.
-See [implementation notes](IMPLEMENTATION.md) for remaining device checks.
+An unsigned AAB is a build artifact, not an installable APK. Device testing and
+store publishing are handled separately by authorized maintainers.
 
 ### Refresh the bundled Galaxy web snapshot
 
@@ -123,7 +112,7 @@ review remain separate release steps.
 
 ## Promote a release
 
-Increase `versionCode` and `versionName` in `app/build.gradle.kts` on the Dev
+For authorized release maintainers: increase `versionCode` and `versionName` in `app/build.gradle.kts` on the Dev
 branch, commit and push, then open the matching promotion PR:
 
 ```sh
@@ -132,57 +121,3 @@ gh pr create --repo dirwin31/StarPilotAndroid --base Play-Distro --head Play-Dev
 ```
 
 Review checks and merge the PR before publishing from `Play-Distro`.
-
-## Publish to Play
-
-These instructions are for authorized release maintainers only; they do not grant
-permission to redistribute the app or publish a store listing.
-
-Choose **one** publication method below. Replace `1.2.1` with the committed
-`versionName`. Release tags must be unique and remain unchanged after publication.
-
-### Option A: publish by tag
-
-```sh
-git fetch origin
-
-# Play release
-git tag play-v1.2.1 origin/Play-Distro
-git push origin play-v1.2.1
-```
-
-The workflow validates the stable branch and version, runs tests, and builds
-the Play edition.
-
-### Option B: run the release workflow manually
-
-```sh
-# Play release to internal testing
-gh workflow run release.yaml --repo dirwin31/StarPilotAndroid \
-  --ref Play-Distro -f tag=play-v1.2.1 -f play_track=internal
-```
-
-Play tracks are `internal`, `alpha`, `beta`, `production`, or `none` to skip
-Play Console upload. Dev branches cannot publish through this workflow.
-
-### Check release progress
-
-```sh
-gh run list --repo dirwin31/StarPilotAndroid --workflow release.yaml
-gh release view play-v1.2.1 --repo dirwin31/StarPilotAndroid
-```
-
-## Release configuration
-
-Configure these secrets in the **`android-release`** GitHub environment:
-
-| Edition | Required secrets |
-| --- | --- |
-| Play signing | `COMPANION_UPLOAD_KEYSTORE_BASE64`, `COMPANION_UPLOAD_KEY_PASSWORD` |
-| Play Console upload | `PLAY_SERVICE_ACCOUNT_JSON` |
-
-Never commit signing keys. Without the Play service account, the signed AAB is published
-to GitHub only. Uploads default to internal testing.
-
-See [Play and push relay setup](push-relay/SETUP.md) for Firebase, upload keys,
-Play Console declarations and review requirements.

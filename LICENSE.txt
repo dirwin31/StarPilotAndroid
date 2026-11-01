@@ -16,6 +16,13 @@ repository. You may use GitHub's viewing, forking, and pull-request features
 as permitted by GitHub's Terms of Service. Retain applicable copyright and
 license notices in those copies.
 
+Permission to modify or build the source under this section is limited to
+evaluation, testing, and submitting contributions. It does not permit ongoing
+personal or business use of modified builds. For ordinary use, use an official
+release. This restriction does not limit activities expressly authorized under
+LICENSE.starpilot-team.md or a separate valid written permission, or rights
+under applicable third-party licenses, valid prior grants, or applicable law.
+
 Official-release use
 
 You may download, install, run, and update official releases obtained from the
