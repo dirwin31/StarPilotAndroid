@@ -174,12 +174,14 @@ class MainActivity : Activity() {
         Networks.manager(this).bindProcessToNetwork(null)
         return generation
     }
-    private fun connect(host: String? = null) {
+    private fun routeOrder() = RoutePlanner.parse(prefs.getString("routeOrder", null))
+    private fun connect(host: String? = null, skipOrder: Boolean = false) {
         if (demoSession != null) return
         val generation = supersedeConnection()
         val mode = prefs.getString("transport", "auto")
         if (host == null && mode == "remote") { connectTunnel(promptForKey = true); return }
         if (host == null && mode == "bluetooth") { connectBluetooth(automatic = true); return }
+        if (host == null && mode == "auto" && !skipOrder && routeOrder().first() != "wifi" && fallbackFrom(null)) return
         val hotspot = Networks.wifi(this)
         val wifi = hotspot ?: Networks.wifi(this, false)
         if (wifi == null) {
@@ -500,7 +502,8 @@ class MainActivity : Activity() {
     }
     private fun connections() {
         demoSession?.let { it.options(); return }
-        ConnectionSheet(this, Transport.of(prefs.getString("transport", "auto")))
+        ConnectionSheet(this, Transport.of(prefs.getString("transport", "auto")), routeOrder().map { Transport.of(it) })
+            .onOrder { order -> prefs.edit().putString("routeOrder", order.joinToString(",") { it.key }).apply() }
             .onTransport { prefs.edit().putString("transport", it.key).apply(); connect() }
             .group("Remote access") {
                 action("Scan Galaxy QR code", "Scan the App key on StarPilot → Galaxy → Access") { scanRemoteKey() }
@@ -628,8 +631,9 @@ class MainActivity : Activity() {
         val cm = Networks.manager(this)
         val internet = cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         val next = RoutePlanner.next(after, prefs.getString("transport", "auto") ?: "auto", Networks.wifi(this, false) != null,
-            internet, tunnel.load() != null, pairing.load() != null && !pairing.stale())
+            internet, tunnel.load() != null, pairing.load() != null && !pairing.stale(), routeOrder())
         when (next) {
+            Route.HOME_NETWORK -> if (after == null) return false else connect(skipOrder = true)
             Route.TUNNEL -> connectTunnel(promptForKey = true)
             Route.BLUETOOTH -> connectBluetooth(automatic = true)
             else -> return false
@@ -644,8 +648,9 @@ class MainActivity : Activity() {
             val generation = connectionGeneration.get()
             val current = activeRoute ?: return@postDelayed
             if (prefs.getString("transport", "auto") != "auto") return@postDelayed
-            val lan = Networks.commaLan(this)
-            if (lan == null) Networks.wifi(this, false)?.let { wifi ->
+            val order = routeOrder()
+            val lan = Networks.commaLan(this)?.takeIf { RoutePlanner.better(Route.HOME_NETWORK, current, order) }
+            if (lan == null && RoutePlanner.better(Route.HOME_NETWORK, current, order)) Networks.wifi(this, false)?.let { wifi ->
                 val search = LanDiscovery(this, wifi.first, 3000L) { hosts, _ ->
                     upgradeDiscovery = null
                     if (generation == connectionGeneration.get() && prefs.getString("transport", "auto") == "auto" && hosts.isNotEmpty()) connect(hosts.first())
@@ -656,7 +661,7 @@ class MainActivity : Activity() {
             val cookie = lan?.let { CookieManager.getInstance().getCookie(it.second) }
             Thread {
                 val lanOk = lan != null && GalaxyProbe.reachable(lan.first, lan.second, cookie) {}
-                val remote = if (!lanOk && current == Route.BLUETOOTH && credential != null) TunnelProbe.check(this, credential) else null
+                val remote = if (!lanOk && current == Route.BLUETOOTH && credential != null && RoutePlanner.better(Route.TUNNEL, current, order)) TunnelProbe.check(this, credential) else null
                 runOnUiThread {
                     if (generation != connectionGeneration.get() || prefs.getString("transport", "auto") != "auto") return@runOnUiThread
                     if (lanOk) connect(lan.second)
