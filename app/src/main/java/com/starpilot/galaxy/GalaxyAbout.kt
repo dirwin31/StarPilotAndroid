@@ -6,6 +6,7 @@ import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.drawable.GradientDrawable
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
@@ -14,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import kotlin.math.sin
+import kotlin.math.cos
 import kotlin.random.Random
 
 internal object GalaxyAbout {
@@ -51,14 +53,20 @@ internal object GalaxyAbout {
         val dp = activity.resources.displayMetrics.density
         val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Palette.SPACE)
-            addView(StarfieldView(activity), LinearLayout.LayoutParams(-1, (260 * dp).toInt()))
+            setPadding((24 * dp).toInt(), (8 * dp).toInt(), (24 * dp).toInt(), (8 * dp).toInt())
+            addView(StarfieldView(activity).apply {
+                background = GradientDrawable().apply {
+                    setColor(Palette.SPACE)
+                    cornerRadius = 20 * dp
+                }
+                clipToOutline = true
+            }, LinearLayout.LayoutParams(-1, (260 * dp).toInt()))
             addView(TextView(activity).apply {
                 setText(R.string.starfield_signature)
                 textSize = 18f
                 gravity = Gravity.CENTER
                 setTextColor(Palette.VIOLET_SOFT)
-                setPadding((20 * dp).toInt(), 0, (20 * dp).toInt(), (24 * dp).toInt())
+                setPadding(0, (20 * dp).toInt(), 0, (8 * dp).toInt())
             }, LinearLayout.LayoutParams(-1, -2))
         }
         AlertDialog.Builder(activity, R.style.AppDialog)
@@ -74,11 +82,25 @@ private class StarfieldView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val random = Random(0x535041)
     private val stars = List(100) { floatArrayOf(random.nextFloat(), random.nextFloat(), random.nextFloat(), random.nextFloat()) }
-    // A fixed seven-star signature, shared by every official edition.
+    // Loose, broken clouds of tiny stars suggest initials only in the background density.
+    // They have no connecting strokes, uniform outline, or bright letter-shaped anchors.
+    private val signatureDust = List(100) { index ->
+        val t = random.nextFloat()
+        val angle = (t * Math.PI - Math.PI / 2).toFloat()
+        val (x, y) = when (index % 4) {
+            0 -> .15f + .025f * sin(t * 5f) to .13f + t * .32f
+            1 -> .16f + .21f * cos(angle) to .29f + .16f * sin(angle)
+            2 -> .63f + .025f * t to .56f + t * .31f
+            else -> .65f + .20f * cos(angle) to .65f + .09f * sin(angle)
+        }
+        floatArrayOf(x + (random.nextFloat() - .5f) * .10f,
+            y + (random.nextFloat() - .5f) * .09f, random.nextFloat(), random.nextFloat())
+    }
+    // An independent, asymmetric foreground constellation crosses the star clouds.
     private val constellation = arrayOf(
-        floatArrayOf(.22f, .58f), floatArrayOf(.34f, .36f), floatArrayOf(.46f, .49f),
-        floatArrayOf(.56f, .25f), floatArrayOf(.66f, .43f), floatArrayOf(.77f, .33f),
-        floatArrayOf(.70f, .68f)
+        floatArrayOf(.16f, .60f), floatArrayOf(.31f, .46f), floatArrayOf(.43f, .57f),
+        floatArrayOf(.53f, .35f), floatArrayOf(.66f, .45f), floatArrayOf(.80f, .30f),
+        floatArrayOf(.75f, .66f)
     )
     private var phase = 0f
     private val shimmer = ValueAnimator.ofFloat(0f, (Math.PI * 2).toFloat()).apply {
@@ -106,20 +128,31 @@ private class StarfieldView(context: Context) : View(context) {
         for (star in stars) {
             val brightness = (130 + 65 * sin(phase + star[3] * 6.283185f)).toInt()
             paint.color = Palette.alpha(Palette.ON, brightness)
-            canvas.drawCircle(star[0] * width, star[1] * height, (.5f + star[2]) * dp, paint)
+            val inset = 12 * dp
+            canvas.drawCircle(inset + star[0] * (width - 2 * inset),
+                inset + star[1] * (height - 2 * inset), (.5f + star[2]) * dp, paint)
         }
-        paint.strokeWidth = dp
-        paint.color = Palette.alpha(Palette.VIOLET, 100)
+        for (star in signatureDust) {
+            val brightness = (75 + 35 * sin(phase + star[3] * 6.283185f)).toInt()
+            paint.color = Palette.alpha(Palette.VIOLET_SOFT, brightness)
+            canvas.drawCircle(star[0] * width, star[1] * height, (.35f + star[2] * .65f) * dp, paint)
+        }
+        paint.strokeWidth = .8f * dp
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.color = Palette.alpha(Palette.VIOLET_SOFT, 85)
         for (i in 1 until constellation.size) {
             val a = constellation[i - 1]
             val b = constellation[i]
             canvas.drawLine(a[0] * width, a[1] * height, b[0] * width, b[1] * height, paint)
         }
-        for (star in constellation) {
-            paint.color = Palette.alpha(Palette.CYAN, 24)
-            canvas.drawCircle(star[0] * width, star[1] * height, 10 * dp, paint)
+        for ((i, star) in constellation.withIndex()) {
+            val glow = (22 + 8 * sin(phase + i)).toInt()
+            paint.color = Palette.alpha(Palette.CYAN, glow)
+            canvas.drawCircle(star[0] * width, star[1] * height, 9 * dp, paint)
             paint.color = Palette.CYAN
-            canvas.drawCircle(star[0] * width, star[1] * height, 2.5f * dp, paint)
+            canvas.drawCircle(star[0] * width, star[1] * height, 2.3f * dp, paint)
+            paint.color = Palette.ON
+            canvas.drawCircle(star[0] * width, star[1] * height, .85f * dp, paint)
         }
     }
 }

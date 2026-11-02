@@ -11,6 +11,12 @@ class TunnelCredentialTest {
         assertEquals(credential, TunnelCredential.parse(credential.sessionToken))
         assertEquals(credential, TunnelCredential.parse("starpilot-remote://add?key=" + java.net.URLEncoder.encode(credential.sessionToken, "UTF-8")))
     }
+    @Test fun acceptsTheQrPayloadExportedByComma() {
+        val credential = TunnelCredential.parse(key)!!
+        assertEquals(credential, TunnelCredential.parse("starpilot-remote://add?key=" + credential.sessionToken))
+        assertNull(TunnelCredential.parse("https://galaxy.firestar.link/" + credential.slug))
+        assertNull(TunnelCredential.parse("starpilot://pair?key=" + credential.token))
+    }
     @Test fun rejectsInvalidSecretsAndAuthority() {
         listOf("bad:" + "a".repeat(64), key.uppercase(), key + ":extra", "starpilot-remote://evil?key=$key", "starpilot-remote://add?key=$key&key=$key", "%zz").forEach { assertNull(it, TunnelCredential.parse(it)) }
         assertNull(TunnelCredential.galaxyId("https://galaxy.firestar.link.evil/AbCd0123456789xy"))

@@ -1,5 +1,6 @@
 package com.starpilot.galaxy
 
+import com.google.zxing.integration.android.IntentIntegrator
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
@@ -107,7 +108,7 @@ class MainActivity : Activity() {
     private var upgradePending = false
     private var upgradeDiscovery: LanDiscovery? = null
     private val upgradeRoutes = object : Runnable {
-        override fun run() { if (resumed) scheduleUpgrade(); handler.postDelayed(this, 15000) }
+        override fun run() { if (resumed) { scheduleUpgrade(); importLocalKey() }; handler.postDelayed(this, 15000) }
     }
     private val defaultWatcher = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
@@ -155,6 +156,7 @@ class MainActivity : Activity() {
     }
     /** Invalidates every older async result before a new route is allowed to win. */
     private fun supersedeConnection(): Int {
+        remotePairingFlow?.cancel(); remotePairingFlow = null
         web?.url?.substringAfter('#', "")?.takeIf { it.startsWith("/") && it.length <= 4096 }?.let { routeHash = it }
         prefs.edit().putString("lastRouteHash", routeHash).apply()
         activeRoute = null
@@ -176,7 +178,7 @@ class MainActivity : Activity() {
         if (demoSession != null) return
         val generation = supersedeConnection()
         val mode = prefs.getString("transport", "auto")
-        if (host == null && mode == "remote") { connectTunnel(); return }
+        if (host == null && mode == "remote") { connectTunnel(promptForKey = true); return }
         if (host == null && mode == "bluetooth") { connectBluetooth(automatic = true); return }
         val hotspot = Networks.wifi(this)
         val wifi = hotspot ?: Networks.wifi(this, false)
@@ -239,7 +241,7 @@ class MainActivity : Activity() {
                     Distribution.checkAsync(this@MainActivity)
                     GalaxyUpdates.checkAsync(this@MainActivity) {}
                     connectedSentry()
-                    TunnelImport.importIfNeeded(this@MainActivity, origin, CookieManager.getInstance().getCookie(origin).orEmpty())
+                    importLocalKey()
                     autoPairIfNeeded()
                 }
             }
@@ -310,6 +312,13 @@ class MainActivity : Activity() {
     }
     @Deprecated("Activity result API for the platform file picker")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == QR_SCAN) {
+            scanningRemoteKey = false
+            if (resultCode == RESULT_OK && data != null) {
+                IntentIntegrator.parseActivityResult(resultCode, data).contents?.let { acceptRemoteKey(it) }
+            }
+            return
+        }
         if (!filePicker.result(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data)
     }
     private fun clearWatchdog() { pageWatchdog?.let { handler.removeCallbacks(it) }; pageWatchdog = null }
@@ -343,7 +352,7 @@ class MainActivity : Activity() {
             if (parent == null || parent.id != android.R.id.content) { parent?.removeView(existing.view); setContentView(existing.view) }
             return existing
         }
-        val created = ConnectScreen(this, ::tryRoute, { connect() }, { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, ::openTypedAddress, ::connections, ::showDemo)
+        val created = ConnectScreen(this, ::tryRoute, { connect() }, { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, ::openTypedAddress, ::connections, ::showDemo, ::scanRemoteKey)
         screen = created
         refreshRoutes(created)
         setContentView(created.view)
@@ -494,15 +503,22 @@ class MainActivity : Activity() {
         ConnectionSheet(this, Transport.of(prefs.getString("transport", "auto")))
             .onTransport { prefs.edit().putString("transport", it.key).apply(); connect() }
             .group("Remote access") {
+                action("Scan Galaxy QR code", "Scan the App key on StarPilot → Galaxy → Access") { scanRemoteKey() }
+                action("Paste Galaxy App key") { addRemoteKey() }
+                action("Import remote key from LAN", "Save the App key from Galaxy on your local network") { importRemoteKey() }
+                if (!prefs.getBoolean("askRemoteImport", true)) action("Show automatic import prompt", "Ask about LAN import when setting up Remote") {
+                    prefs.edit().putBoolean("askRemoteImport", true).apply()
+                    message("Automatic import prompt enabled.")
+                }
                 action("Sign in with Galaxy ID", "Use your Galaxy ID and password") { signInRemote() }
                 action("Remote key", if (tunnel.load() == null) "No key saved · set up from the Remote route on the connection screen"
                     else if (tunnel.verified()) "Verified for firestar.link" else "Saved · verification pending") {
                     AlertDialog.Builder(this@MainActivity).setTitle("Remote access")
-                        .setMessage("Remote connects through firestar.link when local Wi-Fi is unavailable. Use the Remote route on the connection screen to paste an App key, or sign in here.")
+                        .setMessage("Remote connects through firestar.link when local Wi-Fi is unavailable. The Remote route can import your key over LAN. You can also scan its QR code, paste the App key, or sign in here.")
                         .setPositiveButton("Done", null).show()
                 }
                 if (tunnel.load() != null) action("Forget remote key", danger = true) {
-                    tunnel.clear(); if (activeRoute == Route.TUNNEL) connect()
+                    remotePairingRevision++; prefs.edit().putBoolean("autoImportRemoteKey", false).apply(); tunnel.clear(); if (activeRoute == Route.TUNNEL) connect()
                 }
             }
             .group("Connection status") {
@@ -533,6 +549,7 @@ class MainActivity : Activity() {
             }
             .group("Permissions") {
                 val permissions = listOf(
+                    Triple("Camera", arrayOf(Manifest.permission.CAMERA), 24),
                     Triple("Nearby devices", if (Build.VERSION.SDK_INT >= 31) bluetoothPermissions() else emptyArray(), 21),
                     Triple("Precise location", arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 22),
                     Triple("Notifications", if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray(), 23),
@@ -654,9 +671,9 @@ class MainActivity : Activity() {
         if (credential == null) {
             disconnected().apply {
                 route(Route.TUNNEL, RouteState.UNAVAILABLE, "Remote access not set up")
-                detail("Sign in with your Galaxy ID, or paste the App key from StarPilot → Galaxy → Access.")
+                detail("Requires StarPilot v7 and above")
             }
-            if (promptForKey) addRemoteKey()
+            if (promptForKey) offerRemotePairing()
             return
         }
         val generation = supersedeConnection()
@@ -665,7 +682,7 @@ class MainActivity : Activity() {
             val result = TunnelProbe.check(this, credential)
             runOnUiThread {
                 if (generation != connectionGeneration.get() || isDestroyed) return@runOnUiThread
-                if (result == TunnelProbe.Result.REACHABLE) showTunnel(credential)
+                if (result == TunnelProbe.Result.REACHABLE) { runCatching { tunnel.save(credential) }; showTunnel(credential) }
                 else {
                     routeError = if (result == TunnelProbe.Result.BAD_KEY) "App key didn't work. Copy it again from StarPilot → Galaxy → Access." else "Remote is unreachable"
                     routeDetails[Route.TUNNEL] = routeError
@@ -675,6 +692,66 @@ class MainActivity : Activity() {
             }
         }.start()
     }
+    private var remotePairingFlow: RemotePairingFlow? = null
+    private fun offerRemotePairing() {
+        if (!prefs.getBoolean("askRemoteImport", true)) { addRemoteKey(); return }
+        AlertDialog.Builder(this).setTitle("Automatically import Galaxy remote key?")
+            .setItems(arrayOf("Try automatic import on LAN", "Scan QR code", "Paste App key", getString(R.string.dont_ask_again))) { _, choice ->
+                when (choice) {
+                    0 -> importRemoteKey()
+                    1 -> scanRemoteKey()
+                    2 -> addRemoteKey()
+                    3 -> {
+                        prefs.edit().putBoolean("askRemoteImport", false).apply()
+                        Toast.makeText(this, "Automatic import prompts turned off.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }.show()
+    }
+
+    private fun importRemoteKey() {
+        supersedeConnection()
+        remotePairingRevision++
+        connectScreen().route(Route.TUNNEL, RouteState.TRYING, "Importing key…")
+        remotePairingFlow = RemotePairingFlow(this, save = { credential, host ->
+            tunnel.save(credential, verified = false)
+            prefs.edit().putString("host", host).putString("transport", "auto").putBoolean("autoImportRemoteKey", true).apply()
+        }, connect = { connectTunnel() }, scan = ::scanRemoteKey, paste = ::addRemoteKey,
+            finished = { screen?.let(::refreshRoutes); remotePairingFlow = null }).also { it.start() }
+    }
+
+    private var remotePairingRevision = 0
+    private val QR_SCAN = 3001
+    private val QR_CAMERA = 25
+    private var scanningRemoteKey = false
+
+    private fun importLocalKey() {
+        if (demoSession != null || activeRoute !in setOf(Route.GALAXY_WIFI, Route.HOME_NETWORK) ||
+            !prefs.getBoolean("autoImportRemoteKey", true)) return
+        val view = web ?: return
+        val local = Networks.localOrigin(origin) ?: return
+        val network = Networks.commaLan(this)?.takeIf { it.second == local }?.first ?: return
+        val generation = connectionGeneration.get()
+        val revision = remotePairingRevision
+        TunnelImport.importIfNeeded(this, network, local, CookieManager.getInstance().getCookie(local).orEmpty()) {
+            !isDestroyed && !isFinishing && web === view && generation == connectionGeneration.get() && revision == remotePairingRevision
+        }
+    }
+
+    private fun scanRemoteKey() {
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            message("No camera is available. Paste the Galaxy App key instead."); return
+        }
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestFeaturePermissions(arrayOf(Manifest.permission.CAMERA), QR_CAMERA, "Camera")
+            return
+        }
+        scanningRemoteKey = true
+        IntentIntegrator(this).setRequestCode(QR_SCAN).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+            .setPrompt("Scan the App key QR code in StarPilot → Galaxy → Access")
+            .setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(false).initiateScan()
+    }
+
     private fun addRemoteKey() {
         val field = EditText(this).apply {
             setSingleLine(); hint = "Paste Galaxy App key"
@@ -685,18 +762,31 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle("Connect with Galaxy App key")
             .setMessage("On StarPilot, open Galaxy → Access, copy the App key, and paste it here. Or choose Sign in with Galaxy ID under Remote access in Connections.")
             .setView(container).setPositiveButton("Connect") { _, _ -> acceptRemoteKey(field.text.toString()) }
+            .setNeutralButton("Scan QR code") { _, _ -> scanRemoteKey() }
             .setNegativeButton("Cancel", null).show()
     }
     private fun acceptRemoteKey(raw: String) {
         val credential = TunnelCredential.parse(raw)
         if (credential == null) { message("App key didn't work. Copy it again from StarPilot → Galaxy → Access."); return }
+        val revision = ++remotePairingRevision
         val generation = connectionGeneration.get()
         Thread {
             val result = TunnelProbe.check(this, credential)
             runOnUiThread {
-                if (isDestroyed || generation != connectionGeneration.get()) return@runOnUiThread
-                if (result == TunnelProbe.Result.REACHABLE) { tunnel.save(credential); connectTunnel() }
-                else message(if (result == TunnelProbe.Result.BAD_KEY) "App key didn't work. Copy it again from StarPilot → Galaxy → Access." else "Remote is unreachable. Try again when StarPilot and this phone have internet.")
+                if (isDestroyed || isFinishing || revision != remotePairingRevision || generation != connectionGeneration.get()) return@runOnUiThread
+                if (result == TunnelProbe.Result.BAD_KEY) {
+                    message("App key didn't work. Scan or copy it again from StarPilot → Galaxy → Access.")
+                } else {
+                    if (runCatching { tunnel.save(credential, verified = result == TunnelProbe.Result.REACHABLE) }.isFailure) {
+                        message("Couldn't save Galaxy pairing on this phone. Please try again."); return@runOnUiThread
+                    }
+                    prefs.edit().putBoolean("autoImportRemoteKey", true).putString("transport", "auto").apply()
+                    if (result == TunnelProbe.Result.REACHABLE) connectTunnel()
+                    else {
+                        screen?.let(::refreshRoutes)
+                        message("Galaxy pairing saved on this phone. Remote is currently unreachable; it will reconnect when both devices have internet.")
+                    }
+                }
             }
         }.start()
     }
@@ -942,7 +1032,7 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         if (generation != connectionGeneration.get()) return@runOnUiThread
                         connectBluetooth()
-                        offerMusic("Paired with StarPilot.")
+                        offerMusic()
                     }
                 } catch (e: Exception) {
                     transport.close()
@@ -1073,7 +1163,7 @@ class MainActivity : Activity() {
                     pairing.rememberAudio(claim.adapterAddress)
                     transport.close()
                     hidePairProgress()
-                    if (!pairCancelled) runOnUiThread { offerMusic("Paired with StarPilot.") }
+                    if (!pairCancelled) runOnUiThread { offerMusic() }
                 } catch (e: Exception) {
                     transport.close()
                     if (pairCancelled) return@Thread
@@ -1087,11 +1177,10 @@ class MainActivity : Activity() {
         }.start()
     }
     /** Music is its own step: the app pairing is already saved, so "Later" loses nothing. */
-    private fun offerMusic(done: String) {
+    private fun offerMusic() {
         if (isFinishing || isDestroyed || pairing.audioAddress() == null || pairing.musicAddress() != null) return
         AlertDialog.Builder(this, R.style.AppDialog)
             .setTitle("Pair for music too?")
-            .setView(completionCheck(done))
             .setMessage("Pair StarPilot as this phone's Bluetooth audio device to play music. You can do this later from Connections (Set up music only).")
             .setPositiveButton("Pair music now") { _, _ -> startMusicOnly() }
             .setNegativeButton("Later", null)
@@ -1308,8 +1397,12 @@ class MainActivity : Activity() {
             if (results.firstOrNull() == PackageManager.PERMISSION_GRANTED && code == 8) enableSentry(true)
             else if (results.firstOrNull() != PackageManager.PERMISSION_GRANTED) permissionDenied(permissions, "Notifications")
         }
-        if (code in 21..23 && results.any { it != PackageManager.PERMISSION_GRANTED }) {
-            permissionDenied(permissions, when (code) { 21 -> "Nearby devices"; 22 -> "Precise location"; else -> "Notifications" })
+        if (code == QR_CAMERA) {
+            if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scanRemoteKey()
+            else permissionDenied(permissions, "Camera")
+        }
+        if (code in 21..24 && results.any { it != PackageManager.PERMISSION_GRANTED }) {
+            permissionDenied(permissions, when (code) { 21 -> "Nearby devices"; 22 -> "Precise location"; 24 -> "Camera"; else -> "Notifications" })
         }
     }
     private fun showBluetooth(transport: BleTransport) {
@@ -1377,9 +1470,12 @@ class MainActivity : Activity() {
                 share = null
                 installVibrationBridge(v)
                 connectedSentry(transport)
-                if (tunnel.load() == null) try { worker.execute { runCatching {
+                val revision = remotePairingRevision
+                if (tunnel.load() == null && prefs.getBoolean("autoImportRemoteKey", true)) try { worker.execute { runCatching {
                     val reply = transport.request(JSONObject().put("method", "GET").put("path", "/api/galaxy/session").put("headers", JSONObject()).put("body", ""))
-                    if (reply.optInt("status") == 200) TunnelImport.accept(this@MainActivity, JSONObject(String(Base64.getDecoder().decode(reply.optString("body")))))
+                    if (reply.optInt("status") == 200) TunnelImport.accept(this@MainActivity, JSONObject(String(Base64.getDecoder().decode(reply.optString("body"))))) {
+                        !isDestroyed && web === v && revision == remotePairingRevision && prefs.getBoolean("autoImportRemoteKey", true)
+                    }
                 } } } catch (_: RejectedExecutionException) {}
             }
         }
@@ -1448,10 +1544,12 @@ class MainActivity : Activity() {
     }
     override fun onPause() { resumed = false; super.onPause() }
     override fun onStop() {
-        recovery.stopped(if (discovery != null || lanPicker != null) discoveryAutomatic else null, web == null && ble == null)
+        remotePairingFlow?.cancel()
+        if (!scanningRemoteKey) recovery.stopped(if (discovery != null || lanPicker != null) discoveryAutomatic else null, web == null && ble == null)
         super.onStop()
     }
     override fun onDestroy() {
+        remotePairingFlow?.cancel(); remotePairingFlow = null
         demoSession?.close(); demoSession = null; SentryPush.suspended = false
         SentryPush.api = null
         pairCancelled = true; pairTransport?.close(); hidePairProgress()

@@ -46,3 +46,13 @@ def test_built_flavors_keep_install_permission_out_of_play():
     assert ('android.permission.REQUEST_INSTALL_PACKAGES' in permissions) == ('directRelease' in str(path))
     sdk = ET.parse(path).getroot().find('uses-sdk')
     assert sdk.get(ANDROID + 'targetSdkVersion') == '36'
+
+
+def test_qr_scanner_is_private_and_camera_is_optional():
+  root = ET.parse(MANIFEST).getroot()
+  assert "android.permission.CAMERA" in {node.get(ANDROID + "name") for node in root.findall("uses-permission")}
+  features = {node.get(ANDROID + "name"): node.get(ANDROID + "required") for node in root.findall("uses-feature")}
+  assert features["android.hardware.camera"] == "false"
+  assert features["android.hardware.camera.autofocus"] == "false"
+  activity = next(node for node in root.iter("activity") if node.get(ANDROID + "name") == "com.journeyapps.barcodescanner.CaptureActivity")
+  assert activity.get(ANDROID + "exported") == "false"

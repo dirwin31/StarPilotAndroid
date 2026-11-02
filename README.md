@@ -74,6 +74,27 @@ To contribute without repository write access, fork the repository and open a PR
 from your fork into `Play-Dev`. Authenticate with `gh auth login` when using
 GitHub CLI commands that require your account.
 
+## Pair Galaxy remote access
+
+Tap **Remote** and choose **Try automatic import** while the phone and StarPilot
+are on the same LAN. Galaxy shows progress as it finds the device, opens a local
+session, fetches the App key, and saves pairing. Remote access must already be
+enabled on StarPilot under **Galaxy → Access**.
+
+Off LAN, choose **Scan QR code** and scan the **App key** QR code on that screen,
+or paste the key. Camera access is requested only when scanning. QR scanning runs
+on-device using [ZXing Android Embedded](https://github.com/journeyapps/zxing-android-embedded)
+([Apache-2.0 license](https://github.com/journeyapps/zxing-android-embedded/blob/v4.3.0/COPYING)).
+
+Keys are encrypted with Android Keystore and retained across app restarts, even
+when internet verification is pending. Automatic connection tries LAN before
+Remote. **Forget remote key** removes the saved key and disables automatic import
+until you pair again or choose **Import remote key from LAN** in Connections.
+
+The automatic-import prompt has a **Don’t ask again** action at the bottom of its choices. This preference
+survives app restarts; Remote then opens the paste/scan options directly. Manual
+LAN import and **Show automatic import prompt** remain available in Connections.
+
 ## Test and build locally
 
 ### Android unit tests and lint

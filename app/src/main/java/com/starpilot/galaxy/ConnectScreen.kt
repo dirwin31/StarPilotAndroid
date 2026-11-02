@@ -160,7 +160,7 @@ class OrbitView(context: Context) : View(context) {
 
 /** The screen shown while not connected, and over the Galaxy page while it loads. */
 class ConnectScreen(private val activity: Activity, private val onRoute: (Route) -> Unit, onRetry: () -> Unit,
-                    onWifiSettings: () -> Unit, private val onAddress: (String) -> String?, onOptions: () -> Unit, onDemo: () -> Unit) {
+                    onWifiSettings: () -> Unit, private val onAddress: (String) -> String?, onOptions: () -> Unit, onDemo: () -> Unit, onScan: (() -> Unit)? = null) {
     private val dp = activity.resources.displayMetrics.density
     private fun px(value: Number) = (value.toFloat() * dp).roundToInt()
     private val orbit = OrbitView(activity)
@@ -215,6 +215,7 @@ class ConnectScreen(private val activity: Activity, private val onRoute: (Route)
             setOnClickListener { onRetry() }
         }, LinearLayout.LayoutParams(-1, px(52)).apply { topMargin = px(20) })
 
+        onScan?.let { panel.addView(link("Scan Galaxy QR code", it), LinearLayout.LayoutParams(-1, -2)) }
         panel.addView(link("No StarPilot? Explore the demo", onDemo), LinearLayout.LayoutParams(-1, -2))
         val links = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         links.addView(link("Wi-Fi settings", onWifiSettings), LinearLayout.LayoutParams(0, -2, 1f))

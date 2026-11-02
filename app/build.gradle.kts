@@ -62,6 +62,9 @@ android {
 }
 
 dependencies {
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // ZXing's published POM omits the AndroidX runtime used by CaptureManager.
+    implementation("androidx.core:core:1.2.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("com.google.code.gson:gson:2.11.0") { isTransitive = false }
