@@ -68,7 +68,7 @@ class MainActivity : Activity() {
         override fun onLost(network: Network) { knownWifi.remove(network); handler.post {
             if (activeRoute in setOf(Route.GALAXY_WIFI, Route.HOME_NETWORK) && Networks.wifi(this@MainActivity, false) == null) {
                 if (!fallbackFrom(activeRoute)) disconnected()
-            }
+            } else if (activeRoute in setOf(Route.GALAXY_WIFI, Route.HOME_NETWORK)) checkRouteHealth(force = true)
         } }
     }
 
@@ -110,6 +110,42 @@ class MainActivity : Activity() {
     private val upgradeRoutes = object : Runnable {
         override fun run() { if (resumed) { scheduleUpgrade(); importLocalKey() }; handler.postDelayed(this, 15000) }
     }
+    private var routeMisses = 0
+    private var healthRunning = false
+    /**
+     * Automatic only: while a page is open, keeps asking the active route whether it still answers and moves to the next
+     * route in the saved order after a few misses in a row (or at once when [force]d, e.g. the Wi-Fi network just dropped).
+     */
+    private fun checkRouteHealth(force: Boolean = false) {
+        val route = activeRoute
+        if (demoSession != null || healthRunning || route == null || prefs.getString("transport", "auto") != "auto" || pairProgress != null) { if (route == null) routeMisses = 0; return }
+        val generation = connectionGeneration.get()
+        val wifi = (Networks.wifi(this) ?: Networks.wifi(this, false))?.first
+        val credential = tunnel.load()
+        val target = origin
+        val cookie = CookieManager.getInstance().getCookie(target)
+        healthRunning = true
+        Thread {
+            val ok = when (route) {
+                Route.GALAXY_WIFI, Route.HOME_NETWORK -> wifi != null && GalaxyProbe.reachable(wifi, target, cookie) {}
+                Route.TUNNEL -> credential == null || TunnelProbe.check(this, credential) != TunnelProbe.Result.UNREACHABLE
+                Route.BLUETOOTH -> ble?.open != false
+            }
+            runOnUiThread {
+                healthRunning = false
+                if (isFinishing || isDestroyed || generation != connectionGeneration.get()) return@runOnUiThread
+                routeMisses = if (ok) 0 else routeMisses + 1
+                if (!ok && (force || routeMisses >= 3)) {
+                    routeMisses = 0
+                    // Nothing further in the order is usable: stay on this page rather than tear it down, and keep watching.
+                    fallbackFrom(route)
+                }
+            }
+        }.start()
+    }
+    private val routeHealth = object : Runnable {
+        override fun run() { if (resumed) checkRouteHealth(); handler.postDelayed(this, 4000) }
+    }
     private val defaultWatcher = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
             if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) handler.post { if (demoSession == null && idle() && tunnel.load() != null) connect() else scheduleUpgrade() }
@@ -127,6 +163,7 @@ class MainActivity : Activity() {
         Distribution.initialize(this)
         handler.postDelayed(pollSentry, 120000)
         handler.postDelayed(upgradeRoutes, 15000)
+        handler.postDelayed(routeHealth, 4000)
         if (prefs.getBoolean("sentryPushEnabled", false)) { FirebaseRegistration.start(this); SentryPollJob.schedule(this) }
         Distribution.opened(this)
         val cm = Networks.manager(this)
@@ -1306,6 +1343,7 @@ class MainActivity : Activity() {
             return
         }
         if (GalaxyUpdates.store(this).readyRoot == null) {
+            if (automatic && fallbackFrom(Route.BLUETOOTH)) return
             // Bluetooth Galaxy serves pages saved from comma; the first download needs Wi-Fi/LAN.
             disconnected().apply {
                 route(Route.BLUETOOTH, RouteState.FAILED, "Needs one Wi-Fi visit first")
@@ -1316,13 +1354,14 @@ class MainActivity : Activity() {
         val permissions = if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
             else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
-            if (automatic) disconnected().apply {
+            if (automatic) if (!fallbackFrom(Route.BLUETOOTH)) disconnected().apply {
                 route(Route.BLUETOOTH, RouteState.UNAVAILABLE, "Needs permission")
                 detail("Tap Bluetooth on this screen to allow Nearby devices and connect.")
             } else requestFeaturePermissions(permissions, 2, "Nearby devices")
             return
         }
         if (getSystemService(BluetoothManager::class.java).adapter?.isEnabled != true) {
+            if (automatic && fallbackFrom(Route.BLUETOOTH)) return
             disconnected().apply {
                 route(Route.BLUETOOTH, RouteState.UNAVAILABLE, "Bluetooth is off")
                 detail("Turn on Bluetooth in phone settings, then try again.")
@@ -1358,6 +1397,7 @@ class MainActivity : Activity() {
                 transport.close()
                 if (e is PairingNotRecognized) { pairing.markStale(); android.util.Log.w("GalaxyPair", "Pairing not recognized by StarPilot: ${e.message}") }
                 runOnUiThread {
+                    if (automatic && !isFinishing && generation == connectionGeneration.get() && fallbackFrom(Route.BLUETOOTH)) return@runOnUiThread
                     if (e is PairingNotRecognized && !isFinishing && generation == connectionGeneration.get()) disconnected().apply {
                         route(Route.BLUETOOTH, RouteState.FAILED, "Pairing expired")
                         detail("StarPilot no longer recognizes this phone (${e.message}). $ALSO_FORGET_ON_PHONE $PAIR_STEPS Then tap Add Bluetooth Phone Pairing here.")
