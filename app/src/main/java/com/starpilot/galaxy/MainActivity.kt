@@ -695,8 +695,18 @@ class MainActivity : Activity() {
     private var remotePairingFlow: RemotePairingFlow? = null
     private fun offerRemotePairing() {
         if (!prefs.getBoolean("askRemoteImport", true)) { addRemoteKey(); return }
-        AlertDialog.Builder(this).setTitle("Automatically import Galaxy remote key?")
-            .setItems(arrayOf("Try automatic import on LAN", "Scan QR code", "Paste App key", getString(R.string.dont_ask_again))) { _, choice ->
+        val builder = AlertDialog.Builder(this, R.style.AppDialog)
+        val options = arrayOf("Try automatic import on LAN", "Scan QR code", "Paste App key", getString(R.string.dont_ask_again))
+        val adapter = object : ArrayAdapter<String>(builder.context, android.R.layout.simple_list_item_1, options) {
+            override fun getView(position: Int, convertView: android.view.View?, parent: ViewGroup): android.view.View {
+                return (super.getView(position, convertView, parent) as TextView).apply {
+                    setTextColor(Palette.VIOLET_SOFT)
+                    typeface = Palette.medium
+                }
+            }
+        }
+        builder.setTitle("Automatically import Galaxy remote key?")
+            .setAdapter(adapter) { _, choice ->
                 when (choice) {
                     0 -> importRemoteKey()
                     1 -> scanRemoteKey()
