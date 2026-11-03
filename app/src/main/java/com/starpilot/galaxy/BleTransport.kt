@@ -46,6 +46,7 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
     private var challenge = ByteArray(0)
     private var counter = 0L
     private var packetSize = 20
+    private var mtuNegotiated = false
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, state: Int) {
             events.offer(Event(if (state == BluetoothProfile.STATE_CONNECTED) "connect" else "disconnect", status))
@@ -61,10 +62,20 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) { events.offer(Event("write", status)) }
     }
     private fun await(kind: String, seconds: Long = 12): ByteArray {
-        val event = events.poll(seconds, TimeUnit.SECONDS) ?: throw IOException("Bluetooth timed out. Reconnect before retrying; a change may already have applied.")
-        if (!closed && event.kind == kind && event.status in setOf(5, 8, 15)) throw GattDenied(event.status)
-        if (closed || event.kind != kind || event.status != BluetoothGatt.GATT_SUCCESS) throw IOException("Bluetooth disconnected. Check the result before retrying a change.")
-        return event.data
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
+        while (true) {
+            val event = events.poll(deadline - System.nanoTime(), TimeUnit.NANOSECONDS) ?: throw IOException("Bluetooth timed out. Reconnect before retrying; a change may already have applied.")
+            // Android 14+ negotiates the MTU on its own as soon as the link is up, so it can land before service discovery finishes.
+            if (!closed && event.kind == "mtu" && kind != "mtu") { applyMtu(event); continue }
+            if (!closed && event.kind == kind && event.status in setOf(5, 8, 15)) throw GattDenied(event.status)
+            if (closed || event.kind != kind || event.status != BluetoothGatt.GATT_SUCCESS) throw IOException("Bluetooth disconnected (${event.kind}, status ${event.status}). Check the result before retrying a change.")
+            return event.data
+        }
+    }
+    private fun applyMtu(event: Event) {
+        if (event.status != BluetoothGatt.GATT_SUCCESS) return
+        packetSize = (ByteBuffer.wrap(event.data).int - 3).coerceIn(20, 512)
+        mtuNegotiated = true
     }
     private fun characteristic(part: String) = gatt?.getService(uuid("1"))?.getCharacteristic(uuid(part)) ?: throw IOException("Galaxy Bluetooth service unavailable")
     private fun read(part: String): ByteArray {
@@ -131,7 +142,8 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
             onPhase("Checking StarPilot’s Bluetooth service…")
             if (gatt?.discoverServices() != true) throw IOException("Bluetooth discovery failed")
             await("services")
-            if (gatt?.requestMtu(517) == true) packetSize = (ByteBuffer.wrap(await("mtu")).int - 3).coerceIn(20, 512)
+            events.firstOrNull { it.kind == "mtu" }?.let { events.remove(it); applyMtu(it) }
+            if (!mtuNegotiated && gatt?.requestMtu(517) == true) packetSize = (ByteBuffer.wrap(await("mtu")).int - 3).coerceIn(20, 512)
             onPhase("Reading StarPilot’s secure pairing challenge…")
             val info = read("4")
             require(info.size == 17 && info[0].toInt() == 1)
