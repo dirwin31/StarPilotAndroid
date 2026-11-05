@@ -572,7 +572,12 @@ class MainActivity : Activity() {
             .group("Remote access") {
                 if (tunnel.load() != null) {
                     action("Forget remote key", danger = true) {
-                        remotePairingRevision++; prefs.edit().putBoolean("autoImportRemoteKey", false).apply(); tunnel.clear(); if (activeRoute == Route.TUNNEL) connect()
+                        AlertDialog.Builder(this@MainActivity).setTitle("Forget remote key?")
+                            .setMessage("This removes the saved remote key from this phone. You'll need to set up remote access again to use the tunnel.")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Forget") { _, _ ->
+                                remotePairingRevision++; prefs.edit().putBoolean("autoImportRemoteKey", false).apply(); tunnel.clear(); if (activeRoute == Route.TUNNEL) connect()
+                            }.show()
                     }
                 } else {
                     action("Scan Galaxy QR code", "Scan the App key on StarPilot → Galaxy → Access") { scanRemoteKey() }
