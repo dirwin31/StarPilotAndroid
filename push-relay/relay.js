@@ -1,3 +1,4 @@
+import { sendAPNs } from './apns.js'
 const androidApps = new Set(['link.firestar.companion', 'com.starpilot.galaxy'])
 const defaultIosApps = 'link.galaxy.bluetooth.natehuby76'
 export const iosApps = env => new Set(String(env?.IOS_APP_IDS ?? defaultIosApps).split(',').map(id => id.trim()).filter(Boolean))
@@ -72,6 +73,7 @@ export async function handle(request, env, fetcher = fetch, authorize = accessTo
     const count = Number(await env.RATE.get(key)) || 0
     if (count >= 30) return json(429, { error: 'Rate limited' })
     await env.RATE.put(key, String(count + 1), { expirationTtl: 7200 })
+    if (iosApps(env).has(body.appId) && body.token.startsWith('apns.')) return await sendAPNs(body, env, fetcher)
     if (!/^[a-z0-9][a-z0-9-]{4,61}[a-z0-9]$/.test(env.FCM_PROJECT_ID)) throw new Error('Invalid project')
     const token = await authorize(env, fetcher)
     const response = await fetcher(`https://fcm.googleapis.com/v1/projects/${env.FCM_PROJECT_ID}/messages:send`, {

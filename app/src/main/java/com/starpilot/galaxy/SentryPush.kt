@@ -22,13 +22,15 @@ object SentryPush {
             java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { byte -> "%02x".format(byte) }.take(12)
         }.orEmpty()
         return JSONObject().put("id", id).put("available", FirebaseRegistration.available).put("enabled", p.getBoolean("sentryPushEnabled", false))
-            .put("registered", p.getString("fcmRegisteredOrigin", "").orEmpty().isNotEmpty()).toString()
+            .put("registered", p.getString("fcmRegisteredOrigin", "").orEmpty().isNotEmpty())
+            .put("status", p.getString("fcmAcknowledgement", "Enable phone alerts, then enroll the relay in Galaxy → Sentry.")).toString()
     }
     fun enable(ctx: Context, on: Boolean): Boolean {
         if (on && !permitted(ctx)) return false
         val p = prefs(ctx)
         if (on && !p.contains("sentryLastSeenNs")) p.edit().putLong("sentryLastSeenNs", System.currentTimeMillis() * 1000000).apply()
-        p.edit().putBoolean("sentryPushEnabled", on).apply()
+        p.edit().putBoolean("sentryPushEnabled", on).putBoolean("sentryEnrollRequested", on).apply()
+        if (on && !FirebaseRegistration.available) p.edit().putString("fcmAcknowledgement", "Polling only: Firebase is not configured in this build").apply()
         if (on) { FirebaseRegistration.start(ctx); SentryPollJob.schedule(ctx); api?.let { registerIfNeeded(ctx, it) } }
         else {
             FirebaseRegistration.stop(ctx)
@@ -48,16 +50,62 @@ object SentryPush {
         if (suspended) return
         api = current
         val p = prefs(ctx)
-        if (!p.getBoolean("sentryPushEnabled", false)) return
+        if (!p.getBoolean("sentryPushEnabled", false)) {
+            val registrationKey = "fcmSubscription:" + current.origin
+            Thread { synchronized(this) { runCatching {
+                if (!p.getBoolean("sentryPushEnabled", false)) {
+                    val previous = p.getString(registrationKey, "").orEmpty()
+                    if (previous.isNotEmpty()) {
+                        current.request("/api/sentry/notifications", JSONObject().put("action", "appUnsubscribe").put("token", previous))
+                        p.edit().remove(registrationKey).apply()
+                    }
+                }
+            } } }.start()
+            return
+        }
         val token = p.getString("fcmToken", "").orEmpty()
         if (!FirebaseRegistration.available || token.isEmpty()) return
-        Thread { runCatching {
-            val result = current.request("/api/sentry/notifications", JSONObject().put("action", "appSubscribe").put("token", token)
-                .put("appId", BuildConfig.APPLICATION_ID).put("label", Build.MODEL.take(64)))
-            if (p.getBoolean("sentryPushEnabled", false) && p.getString("fcmToken", "") == token) {
-                p.edit().putString("fcmRegisteredOrigin", current.origin).putString("fcmAcknowledgement", if (result.optBoolean("appPushAvailable")) "Registered" else "Polling; relay not configured").apply()
+        Thread { synchronized(this) { runCatching {
+            if (!p.getBoolean("sentryPushEnabled", false) || p.getString("fcmToken", "") != token) return@runCatching
+            val registrationKey = "fcmSubscription:" + current.origin
+            val previous = p.getString(registrationKey, "").orEmpty()
+            if (previous.isNotEmpty() && previous != token) {
+                current.request("/api/sentry/notifications", JSONObject().put("action", "appUnsubscribe").put("token", previous))
+                p.edit().remove(registrationKey).apply()
             }
-        }.onFailure { p.edit().putString("fcmAcknowledgement", "Registration failed").apply() } }.start()
+            var result = current.request("/api/sentry/notifications", JSONObject().put("action", "appSubscribe").put("token", token)
+                .put("appId", BuildConfig.APPLICATION_ID).put("label", Build.MODEL.take(64)))
+            p.edit().putString(registrationKey, token).apply()
+            result = enrollIfRequested(ctx, current, result)
+            if (p.getBoolean("sentryPushEnabled", false) && p.getString("fcmToken", "") == token) {
+                p.edit().putString("fcmRegisteredOrigin", current.origin).putString("fcmAcknowledgement", relayStatus(result)).apply()
+            } else {
+                current.request("/api/sentry/notifications", JSONObject().put("action", "appUnsubscribe").put("token", token))
+                p.edit().remove(registrationKey).apply()
+            }
+        }.onFailure { p.edit().putString("fcmAcknowledgement", "Registration failed; reconnect to retry").apply() } } }.start()
+    }
+
+    internal fun enrollIfRequested(ctx: Context, current: SentryApi, snapshot: JSONObject): JSONObject {
+        val p = prefs(ctx)
+        var result = snapshot
+        if (p.getBoolean("sentryEnrollRequested", false) && p.getBoolean("sentryPushEnabled", false)) {
+            val enrollment = result.optJSONObject("relayEnrollment")
+            if (enrollment?.optBoolean("automaticConfigured") == true || enrollment?.optString("state") in listOf("enrolling", "enrolled", "rotating", "confirming")) {
+                result = current.request("/api/sentry/notifications", JSONObject().put("action", "relayEnroll").put("confirmed", true))
+                p.edit().putBoolean("sentryEnrollRequested", false).apply()
+            } else if (enrollment == null) p.edit().putBoolean("sentryEnrollRequested", false).apply()
+        }
+        return result
+    }
+    internal fun relayStatus(result: JSONObject): String {
+        return when (result.optJSONObject("relayEnrollment")?.optString("state")) {
+            "enrolling", "rotating", "confirming" -> "Phone registered; waiting for relay enrollment in Galaxy → Sentry"
+            "unenrolled", "revoked" -> if (result.optJSONObject("relayEnrollment")?.optBoolean("automaticConfigured") == true) "Enable alerts to enroll this comma automatically" else "Phone registered; hosted alerts are not configured in this release yet"
+            "revoking" -> "Relay revocation pending; push alerts paused"
+            "actionRequired" -> "Relay authorization needs attention in Galaxy → Sentry"
+            else -> if (result.optBoolean("appPushAvailable")) "Registered; send a test from Galaxy → Sentry" else "Polling; relay not configured"
+        }
     }
     @Synchronized fun receive(ctx: Context, data: Map<String, String>, fromPush: Boolean = true, demo: Boolean = false): Boolean {
         val p = prefs(ctx)

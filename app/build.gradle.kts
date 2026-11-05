@@ -1,6 +1,9 @@
 plugins { id("com.android.application") }
 
 val firebaseEnabled = file("google-services.json").exists()
+check(providers.gradleProperty("requireSentryPush").orNull != "true" || firebaseEnabled) {
+    "Sentry push requires app/google-services.json. Follow push-relay/SETUP.md before building."
+}
 // Google Play app signing certificate of com.starpilot.auto (verified from the installed Play APK).
 val playAaSignerSha256 = "13AE59E1A17F956D77E46F6E10C23913CBE47291164ECB43C5D9F107B157319A"
 val aaSignerSha256 = (System.getenv("AA_COMPANION_CERT_SHA256") ?: playAaSignerSha256).uppercase()

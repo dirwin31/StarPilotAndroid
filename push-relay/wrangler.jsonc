@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "galaxy-sentry-relay",
+  "main": "worker.js",
+  "compatibility_date": "2026-01-01",
+  "workers_dev": true,
+  "observability": { "enabled": false },
+  "vars": {
+    "AUTO_ENROLL": "true",
+    "AUTO_ENROLL_DAILY_LIMIT": "100",
+    "AUTO_ENROLL_IP_DAILY_LIMIT": "5",
+    "MAX_INSTALLATIONS": "1000",
+    "DAILY_SEND_LIMIT": "1000",
+    "FCM_PROJECT_ID": "replace-with-firebase-project-id",
+    "IOS_APP_IDS": "link.galaxy.bluetooth.natehuby76",
+    "APNS_TEAM_ID": "REPLACE_ME",
+    "APNS_KEY_ID": "REPLACE_ME"
+  },
+  "durable_objects": { "bindings": [{ "name": "ENROLLMENT", "class_name": "EnrollmentRegistry" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EnrollmentRegistry"] }],
+  "kv_namespaces": [{ "binding": "RATE", "id": "replace-with-kv-namespace-id" }],
+  "ratelimits": [{ "name": "INGRESS", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } }]
+}
