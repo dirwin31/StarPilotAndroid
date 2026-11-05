@@ -295,6 +295,7 @@ class ConnectScreen(private val activity: Activity, private val onRoute: (Route)
         }
     }
     fun route(route: Route, state: RouteState, text: String) {
+        DiagnosticLog.routeStatus(route.name, state.name, text)
         states[route] = state
         orbit.set(route, state)
         val row = rows[route] ?: return

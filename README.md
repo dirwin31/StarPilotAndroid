@@ -95,6 +95,56 @@ The automatic-import prompt has a **Don’t ask again** action at the bottom of 
 survives app restarts; Remote then opens the paste/scan options directly. Manual
 LAN import and **Show automatic import prompt** remain available in Connections.
 
+## Send a support report
+
+Open **More options → Connection status → Report a problem**. Connect with Discord
+in your browser, describe the problem, and choose a new thread or one of your
+existing Android report threads. Tap **Send report** to capture diagnostics and submit the report directly.
+You can inspect the captured diagnostics afterward using **Review saved report**.
+
+Reports include the app/build and phone/OS identity, UTC/local time and timezone,
+the report UUID, every permission requested by the installed app and its current grant status,
+notification access and applicable install-app access, selected and active connection, current status and last error,
+Galaxy/Tunnel/music setup, Android audio bond, permissions/radio state, and a
+bounded Bluetooth connection/pairing timeline. Available comma software
+version/branch/commit is labeled with its observation time; data from an earlier
+connection is marked as potentially belonging to a different comma. Music bond
+status does not establish the current audio output. Events and observed software
+are kept in memory for this app process; saved retries retain the original report.
+
+The app uses a Discord report relay. Worker version 13 or newer is
+required for Android platform handling. Discord redirects through the Worker's
+HTTPS callback back into the app. State, issuer, expiry,
+and PKCE are checked; all secrets and webhooks stay on the Worker. The app needs
+an internet connection and uses a validated network for relay requests even when
+Galaxy is bound to the comma's offline Wi-Fi.
+
+A saved report retains its original UUID and contents, encrypted on the phone.
+Only definite rejections can be retried, under the original Discord account for
+six days. Check Discord before discarding an unconfirmed delivery. Disconnecting
+Discord keeps the saved report; clearing it never deletes posts from Discord.
+See [the privacy policy](PRIVACY.md) for visibility and retention details.
+
+Before shipping, check real browser sign-in/return, sending, private attachments,
+follow-ups, and thread opening on a phone against the deployed Worker. Local
+mock tests cannot establish live Discord or Cloudflare configuration.
+
+### Maintainer support dashboard
+
+Worker version 19 provides the Android support dashboard.
+The relay owner generates a one-time Android setup link; the Android maintainer
+uses it to create a dashboard password. Dashboard sign-in is separate from the
+app's Discord sign-in. Release keys and dashboard credentials belong with release
+operators and must never be included in the app.
+
+Confirmed Android reports and follow-ups are indexed automatically. The dashboard
+can import older reports, show commits from `dirwin31/StarPilotAndroid` on
+`Play-Dev`, and draft an update for a selected report thread. Review each draft
+and confirm the recipient can download the stated version/build before sending
+a notice. A commit or successful build alone does not establish availability.
+
+Contact the relay owner for setup, permissions, and release-notice details.
+
 ## Test and build locally
 
 ### Android unit tests and lint

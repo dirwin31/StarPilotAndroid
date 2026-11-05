@@ -26,6 +26,11 @@ private class ResponseTimeout : IOException("Bluetooth response timed out. Check
 class BleTransport(context: Context, private val key: ByteArray?, private val hello: JSONObject? = null) : Closeable {
     /** Reports what the connection is doing, so a slow pairing shows where it waits. */
     @Volatile var onPhase: (String) -> Unit = {}
+    private fun phase(message: String) {
+        DiagnosticLog.bluetoothPhase = message
+        DiagnosticLog.record("BLE: $message")
+        onPhase(message)
+    }
     private val context: Context = context.applicationContext
     companion object {
         /** Serializes connection creation across the phone UI and the car bridge. */
@@ -38,6 +43,9 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
         val busy get() = connecting.get() > 0
     }
     val open get() = !closed && session.isNotEmpty()
+    /** Diagnostics distinguish an authenticated session from a link Android has already disconnected. */
+    val linkActive get() = open && linkConnected
+    @Volatile private var linkConnected = false
     private data class Event(val kind: String, val status: Int, val data: ByteArray = byteArrayOf())
     private val events = LinkedBlockingQueue<Event>()
     @Volatile private var gatt: BluetoothGatt? = null
@@ -49,10 +57,20 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
     private var mtuNegotiated = false
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, state: Int) {
+            linkConnected = !closed && status == BluetoothGatt.GATT_SUCCESS && state == BluetoothProfile.STATE_CONNECTED
+            DiagnosticLog.record("BLE GATT connection state=$state status=$status expectedClose=$closed")
+            if (!closed && (status != BluetoothGatt.GATT_SUCCESS || state == BluetoothProfile.STATE_DISCONNECTED))
+                DiagnosticLog.failure("BLE link disconnected: state=$state GATT status=$status")
             events.offer(Event(if (state == BluetoothProfile.STATE_CONNECTED) "connect" else "disconnect", status))
         }
-        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { events.offer(Event("mtu", status, ByteBuffer.allocate(4).putInt(mtu).array())) }
-        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) { events.offer(Event("services", status)) }
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            DiagnosticLog.record("BLE MTU=$mtu GATT status=$status")
+            events.offer(Event("mtu", status, ByteBuffer.allocate(4).putInt(mtu).array()))
+        }
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            DiagnosticLog.record("BLE service discovery GATT status=$status")
+            events.offer(Event("services", status))
+        }
         @Deprecated("Pre Android 13 callback") override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
             if (Build.VERSION.SDK_INT < 33) events.offer(Event("read", status, c.value ?: byteArrayOf()))
         }
@@ -64,11 +82,20 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
     private fun await(kind: String, seconds: Long = 12): ByteArray {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
         while (true) {
-            val event = events.poll(deadline - System.nanoTime(), TimeUnit.NANOSECONDS) ?: throw IOException("Bluetooth timed out. Reconnect before retrying; a change may already have applied.")
+            val event = events.poll(deadline - System.nanoTime(), TimeUnit.NANOSECONDS) ?: run {
+                DiagnosticLog.failure("BLE timeout waiting for $kind (${seconds}s)")
+                throw IOException("Bluetooth timed out. Reconnect before retrying; a change may already have applied.")
+            }
             // Android 14+ negotiates the MTU on its own as soon as the link is up, so it can land before service discovery finishes.
             if (!closed && event.kind == "mtu" && kind != "mtu") { applyMtu(event); continue }
-            if (!closed && event.kind == kind && event.status in setOf(5, 8, 15)) throw GattDenied(event.status)
-            if (closed || event.kind != kind || event.status != BluetoothGatt.GATT_SUCCESS) throw IOException("Bluetooth disconnected (${event.kind}, status ${event.status}). Check the result before retrying a change.")
+            if (!closed && event.kind == kind && event.status in setOf(5, 8, 15)) {
+                DiagnosticLog.failure("BLE $kind access denied: GATT status=${event.status}")
+                throw GattDenied(event.status)
+            }
+            if (closed || event.kind != kind || event.status != BluetoothGatt.GATT_SUCCESS) {
+                DiagnosticLog.failure("BLE waiting for $kind: received=${event.kind} GATT status=${event.status} closed=$closed")
+                throw IOException("Bluetooth disconnected (${event.kind}, status ${event.status}). Check the result before retrying a change.")
+            }
             return event.data
         }
     }
@@ -99,16 +126,22 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
         }
     }
     private fun connectOnce(preferredAddress: String?): String {
+        DiagnosticLog.record("BLE connect: rememberedDevice=${preferredAddress != null}")
         val device = try { linkUp(preferredAddress) } catch (e: GattDenied) {
             throw PairingNotRecognized("StarPilot has no paired phone matching this one")
         }
         try {
             // Authenticate before exposing cached controls. Do not trust the advertised device name.
             val health = JSONObject().put("method", "GET").put("path", "/_bridge/health").apply { hello?.let { put("phone", it) } }
+            phase("Authenticating the saved app pairing…")
             val response = try { request(health, 20) } catch (e: ResponseTimeout) {
                 throw PairingNotRecognized("StarPilot didn't recognize this phone's pairing")
             }
-            if (response.getInt("status") != 200) throw IOException("Galaxy Bluetooth authentication failed")
+            if (response.getInt("status") != 200) {
+                DiagnosticLog.failure("BLE authentication HTTP ${response.optInt("status")}")
+                throw IOException("Galaxy Bluetooth authentication failed")
+            }
+            phase("App pairing authenticated")
             val previous = active
             active = this
             if (previous !== this) previous?.close()
@@ -121,12 +154,15 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
         if (!adapter.isEnabled) throw IOException("Enable Bluetooth on your phone and StarPilot")
         val remembered = preferredAddress?.let { runCatching { adapter.getRemoteDevice(it) }.getOrNull() }
         val device = remembered ?: run {
-            onPhase("Looking for StarPilot over Bluetooth…")
+            phase("Looking for StarPilot over Bluetooth…")
             val scanner = adapter.bluetoothLeScanner ?: throw IOException("Bluetooth scanner unavailable")
             val found = LinkedBlockingQueue<BluetoothDevice>()
             val scan = object : ScanCallback() {
                 override fun onScanResult(type: Int, result: ScanResult) { found.offer(result.device) }
-                override fun onScanFailed(code: Int) { events.offer(Event("scan-failed", code)) }
+                override fun onScanFailed(code: Int) {
+                    DiagnosticLog.failure("BLE scan failed: Android code=$code")
+                    events.offer(Event("scan-failed", code))
+                }
             }
             scanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(uuid("1"))).build()),
                 ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scan)
@@ -135,16 +171,17 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
         }
         if (closed) throw IOException("Connection canceled")
         events.clear()
-        onPhase("Found StarPilot. Connecting…")
+        phase("Found StarPilot. Connecting…")
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
         try {
             await("connect", if (remembered != null) 4 else 12)
-            onPhase("Checking StarPilot’s Bluetooth service…")
+            phase("Checking StarPilot’s Bluetooth service…")
             if (gatt?.discoverServices() != true) throw IOException("Bluetooth discovery failed")
             await("services")
             events.firstOrNull { it.kind == "mtu" }?.let { events.remove(it); applyMtu(it) }
             if (!mtuNegotiated && gatt?.requestMtu(517) == true) packetSize = (ByteBuffer.wrap(await("mtu")).int - 3).coerceIn(20, 512)
-            onPhase("Reading StarPilot’s secure pairing challenge…")
+            DiagnosticLog.record("BLE negotiated payload bytes=$packetSize")
+            phase("Reading StarPilot’s secure pairing challenge…")
             val info = read("4")
             require(info.size == 17 && info[0].toInt() == 1)
             challenge = info.copyOfRange(1, 17)
@@ -160,10 +197,10 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
             try { linkUp(null) } catch (e: GattDenied) {
                 throw IOException("StarPilot's pairing window isn't open. Open Pair phone on StarPilot first (Settings > Bluetooth > Pair phone), then try again.")
             }
-            onPhase("Pairing: sending this phone’s request to StarPilot…")
+            phase("Pairing: sending this phone’s request to StarPilot…")
             val frame = ByteBuffer.allocate(4 + body.size).putInt(body.size).put(body).array()
             for (packet in BleWire.packets(frame, packetSize)) write(packet)
-            onPhase("Pairing: waiting for StarPilot’s secure reply…")
+            phase("Pairing: waiting for StarPilot’s secure reply…")
             val assembler = BleWire.Assembler()
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
             while (System.nanoTime() < deadline) {
@@ -171,7 +208,7 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
                 if (packet.contentEquals(byteArrayOf(0))) { Thread.sleep(30); continue }
                 val result = assembler.add(packet)
                 if (result != null) {
-                    onPhase("Pairing: receiving StarPilot’s secure reply…")
+                    phase("Pairing: receiving StarPilot’s secure reply…")
                     write(ByteBuffer.allocate(5).put(2).put(packet, 1, 4).array())
                     return challenge to result
                 }
@@ -180,6 +217,7 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
         } catch (e: Exception) { close(); throw e } finally { connecting.decrementAndGet() }
     }
     @Synchronized fun request(value: JSONObject, deadlineSeconds: Long = 90): JSONObject {
+        val diagnosticEpoch = DiagnosticLog.epoch()
         check(!closed && session.isNotEmpty())
         val id = UUID.randomUUID().toString()
         val count = ++counter
@@ -199,14 +237,24 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
                     decoded.body?.let { require(!response.has("body")); response.put("body", java.util.Base64.getEncoder().encodeToString(it)) }
                     require(response.getString("id") == id && response.getString("session") == session && response.getLong("counter") == count)
                     write(ByteBuffer.allocate(5).put(2).put(packet, 1, 4).array())
+                    if (value.optString("method") == "GET" && value.optString("path").substringBefore('?') == "/api/software/status" && response.optInt("status") == 200) {
+                        runCatching {
+                            DiagnosticLog.observeSoftware(JSONObject(String(java.util.Base64.getDecoder().decode(response.getString("body")), Charsets.UTF_8)), "BLUETOOTH", diagnosticEpoch)
+                        }
+                    }
                     return response
                 }
             }
+            DiagnosticLog.failure("BLE authenticated reply timed out (${deadlineSeconds}s)")
             throw ResponseTimeout()
-        } catch (e: Exception) { close(); throw e }
+        } catch (e: Exception) {
+            DiagnosticLog.record("BLE request failed: ${e.javaClass.simpleName}")
+            close(); throw e
+        }
     }
     override fun close() {
         closed = true
+        linkConnected = false
         if (active === this) active = null
         val old = gatt; gatt = null
         old?.disconnect(); old?.close()

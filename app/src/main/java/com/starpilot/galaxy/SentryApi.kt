@@ -7,7 +7,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 class SentryApi(val origin: String, private val cookie: String, private val network: Network? = null,
-                private val bridge: ((String, JSONObject?) -> JSONObject)? = null) {
+                private val bridge: ((String, JSONObject?) -> JSONObject)? = null,
+                private val cookieProvider: (() -> String)? = null) {
     fun request(path: String, body: JSONObject? = null): JSONObject = bridge?.invoke(path, body) ?: JSONObject(String(bytes(path, body)))
     fun bytes(path: String, body: JSONObject? = null): ByteArray {
         check(!Thread.currentThread().isInterrupted)
@@ -15,7 +16,7 @@ class SentryApi(val origin: String, private val cookie: String, private val netw
         val connection = (network?.openConnection(URL(origin + path)) ?: URL(origin + path).openConnection()) as HttpURLConnection
         try {
             connection.connectTimeout = 2000; connection.readTimeout = 3000; connection.instanceFollowRedirects = false
-            connection.setRequestProperty("Cookie", cookie)
+            connection.setRequestProperty("Cookie", cookieProvider?.invoke() ?: cookie)
             if (body != null) {
                 connection.requestMethod = "POST"; connection.doOutput = true
                 connection.setRequestProperty("Origin", if (origin.startsWith("https://galaxy.firestar.link/")) "https://galaxy.firestar.link" else origin)

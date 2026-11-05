@@ -2,8 +2,10 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" path="." />
+        <exclude domain="sharedpref" path="discord-reports.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="root" path="." />
+        <exclude domain="sharedpref" path="discord-reports.xml" />
     </device-transfer>
 </data-extraction-rules>

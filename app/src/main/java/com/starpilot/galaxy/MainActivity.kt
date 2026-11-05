@@ -91,15 +91,29 @@ class MainActivity : Activity() {
         }
     }
     private fun connectedSentry(transport: BleTransport? = null) {
+        val requestOrigin = origin
         val current = if (transport != null) SentryApi(origin, "", bridge = { path, body ->
             val reply = transport.request(JSONObject().put("method", if (body == null) "GET" else "POST").put("path", path)
                 .put("headers", JSONObject().put("Content-Type", "application/json"))
                 .put("body", if (body == null) "" else Base64.getEncoder().encodeToString(body.toString().toByteArray())))
             require(reply.optInt("status") == 200)
             JSONObject(String(Base64.getDecoder().decode(reply.optString("body"))))
-        }) else SentryApi(origin, CookieManager.getInstance().getCookie(origin).orEmpty(),
-            if (activeRoute == Route.TUNNEL) Networks.manager(this).activeNetwork else Networks.commaLan(this)?.first)
+        }) else SentryApi(requestOrigin, "",
+            if (activeRoute == Route.TUNNEL) Networks.manager(this).activeNetwork else Networks.commaLan(this)?.first,
+            // Galaxy's async auth/session read can set or rotate cookies after onPageFinished.
+            cookieProvider = { CookieManager.getInstance().getCookie(requestOrigin).orEmpty() })
         SentryPush.registerIfNeeded(this, current)
+        if (transport == null) {
+            val generation = connectionGeneration.get()
+            val epoch = DiagnosticLog.epoch()
+            val source = activeRoute?.name ?: "Unknown"
+            try { worker.execute {
+                if (generation != connectionGeneration.get() || isDestroyed) return@execute
+                runCatching { current.request("/api/software/status?history=0") }
+                    .onSuccess { DiagnosticLog.observeSoftware(it, source, epoch) }
+                    .onFailure { DiagnosticLog.record("Comma software status unavailable: ${it.javaClass.simpleName}") }
+            } } catch (_: RejectedExecutionException) { DiagnosticLog.record("Comma software status deferred: request queue busy") }
+        }
     }
     private fun enableSentry(on: Boolean): Boolean {
         if (on && !SentryPush.permitted(this)) { runOnUiThread { requestFeaturePermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 8, "Notifications") }; return false }
@@ -136,6 +150,7 @@ class MainActivity : Activity() {
                 if (isFinishing || isDestroyed || generation != connectionGeneration.get()) return@runOnUiThread
                 routeMisses = if (ok) 0 else routeMisses + 1
                 if (!ok && (force || routeMisses >= 3)) {
+                    DiagnosticLog.failure("${route.name} health check failed")
                     routeMisses = 0
                     // Nothing further in the order is usable: stay on this page rather than tear it down, and keep watching.
                     fallbackFrom(route)
@@ -157,6 +172,7 @@ class MainActivity : Activity() {
     private var backCallback: android.window.OnBackInvokedCallback? = null
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        DiagnosticLog.record("Galaxy opened ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         if (Build.VERSION.SDK_INT >= 33) backCallback = android.window.OnBackInvokedCallback { navigateBack() }.also { onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, it) }
         if (intent.getBooleanExtra("demo", false)) { showDemo(); return }
         share = intent.getStringExtra("share")?.take(8192)
@@ -193,6 +209,7 @@ class MainActivity : Activity() {
     }
     /** Invalidates every older async result before a new route is allowed to win. */
     private fun supersedeConnection(): Int {
+        DiagnosticLog.beginConnection()
         remotePairingFlow?.cancel(); remotePairingFlow = null
         web?.url?.substringAfter('#', "")?.takeIf { it.startsWith("/") && it.length <= 4096 }?.let { routeHash = it }
         prefs.edit().putString("lastRouteHash", routeHash).apply()
@@ -214,6 +231,7 @@ class MainActivity : Activity() {
     private fun routeOrder() = RoutePlanner.parse(prefs.getString("routeOrder", null))
     private fun connect(host: String? = null, skipOrder: Boolean = false) {
         if (demoSession != null) return
+        DiagnosticLog.record("Connection attempt started")
         val generation = supersedeConnection()
         val mode = prefs.getString("transport", "auto")
         if (host == null && mode == "remote") { connectTunnel(promptForKey = true); return }
@@ -270,7 +288,10 @@ class MainActivity : Activity() {
                 return WebResourceResponse("text/plain", "UTF-8", 403, "Local Galaxy only", emptyMap(), ByteArrayInputStream(byteArrayOf()))
             }
             override fun onReceivedError(v: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (web === v && request.isForMainFrame) runOnUiThread { pageFailed(v) }
+                if (web === v && request.isForMainFrame) {
+                    DiagnosticLog.failure("Local Galaxy page error ${error.errorCode}")
+                    runOnUiThread { pageFailed(v) }
+                }
             }
             // Reveal as soon as Galaxy starts drawing, so a slow asset never trips the watchdog.
             override fun onPageCommitVisible(v: WebView, url: String) { if (web === v && Networks.localOrigin(url) == origin) { installVibrationBridge(v); revealWeb() } }
@@ -363,6 +384,7 @@ class MainActivity : Activity() {
     private fun clearWatchdog() { pageWatchdog?.let { handler.removeCallbacks(it) }; pageWatchdog = null }
     private fun pageFailed(v: WebView) {
         if (web !== v) return
+        DiagnosticLog.failure("Local Galaxy page did not open")
         val failed = origin
         disconnected().apply {
             if (failed == Networks.ORIGIN) {
@@ -377,6 +399,7 @@ class MainActivity : Activity() {
     }
     private fun disconnected(): ConnectScreen {
         supersedeConnection()
+        DiagnosticLog.connectionStatus = "Disconnected; waiting for a connection"
         screen = null
         return connectScreen().apply {
             headline("Connect to StarPilot")
@@ -445,6 +468,9 @@ class MainActivity : Activity() {
     }
     private fun showWeb(view: WebView, route: Route, label: String, waitForPage: Boolean) {
         activeRoute = route
+        DiagnosticLog.activeConnection = route.name
+        DiagnosticLog.connectionStatus = if (waitForPage) "${route.name}: connected; loading Galaxy" else "${route.name}: connected"
+        DiagnosticLog.record("${route.name} connection opened")
         routeDetails[route] = "Connected"
         // A WebView must own focus or taps on its text fields never raise the keyboard.
         view.isFocusable = true; view.isFocusableInTouchMode = true
@@ -484,6 +510,7 @@ class MainActivity : Activity() {
     }
     private fun revealWeb() {
         clearWatchdog()
+        DiagnosticLog.connectionStatus = "${activeRoute?.name ?: "Unknown"}: Galaxy page loaded"
         val overlay = screen ?: return
         screen = null
         overlay.dismiss()
@@ -562,6 +589,9 @@ class MainActivity : Activity() {
                 }
             }
             .group("Connection status") {
+                action("Report a problem", "Connect Discord and send a support report") {
+                    startActivity(Intent(this@MainActivity, DiscordReportActivity::class.java))
+                }
                 action("View route details", "See the latest result for each connection route") {
                     val details = Route.entries.joinToString("\n") { route ->
                         "${route.title}: ${routeDetails[route] ?: "Not checked"}"
@@ -728,6 +758,7 @@ class MainActivity : Activity() {
                 else {
                     routeError = if (result == TunnelProbe.Result.BAD_KEY) "App key didn't work. Copy it again from StarPilot → Galaxy → Access." else "Remote is unreachable"
                     routeDetails[Route.TUNNEL] = routeError
+                    DiagnosticLog.failure("Tunnel probe: ${result.name}")
                     if (result == TunnelProbe.Result.BAD_KEY) tunnel.clear()
                     if (!fallbackFrom(Route.TUNNEL)) disconnected().apply { route(Route.TUNNEL, RouteState.FAILED, routeError) }
                 }
@@ -913,11 +944,17 @@ class MainActivity : Activity() {
             override fun onPageFinished(v: WebView, url: String) { if (web === v && Networks.tunnelOrigin(url, credential.slug)) { installVibrationBridge(v); revealWeb(); connectedSentry() } }
             override fun onReceivedHttpError(v: WebView, request: WebResourceRequest, response: WebResourceResponse) {
                 if (request.isForMainFrame && response.statusCode in setOf(401, 403)) runOnUiThread {
-                    if (web === v) { tunnel.clear(); if (!fallbackFrom(Route.TUNNEL)) disconnected() }
+                    if (web === v) {
+                        DiagnosticLog.failure("Tunnel page HTTP ${response.statusCode}")
+                        tunnel.clear(); if (!fallbackFrom(Route.TUNNEL)) disconnected()
+                    }
                 }
             }
             override fun onReceivedError(v: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) runOnUiThread { if (web === v && !fallbackFrom(Route.TUNNEL)) disconnected() }
+                if (request.isForMainFrame) runOnUiThread { if (web === v) {
+                    DiagnosticLog.failure("Tunnel page error ${error.errorCode}")
+                    if (!fallbackFrom(Route.TUNNEL)) disconnected()
+                } }
             }
         }
         showWeb(view, Route.TUNNEL, "Remote · firestar.link", waitForPage = true)
@@ -998,7 +1035,7 @@ class MainActivity : Activity() {
         } else showNotice("Looking for StarPilot on LAN…")
         search.start()
     }
-    /** How comma lists this phone under Settings → Bluetooth, e.g. "Danny's Pixel 8". */
+    /** How comma lists this phone under Settings → Bluetooth. */
     private fun phoneName(): String =
         (Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)?.trim()?.takeIf { it.isNotEmpty() }
             ?: "${Build.MANUFACTURER} ${Build.MODEL}").take(40)
@@ -1016,6 +1053,7 @@ class MainActivity : Activity() {
             .setNegativeButton("Cancel", null).show()
     }
     private fun pairPhone(confirmed: Boolean = false) {
+        DiagnosticLog.record("Bluetooth app pairing requested; manualWindowConfirmed=$confirmed")
         if (pairProgress != null || autoPairing.get()) return
         val permissions = if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
             else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -1048,6 +1086,7 @@ class MainActivity : Activity() {
                     showPairProgress("Opening StarPilot’s pairing window over Wi-Fi…", 1)
                     val why = LanPairing.openWindow(network, origin)
                     if (why != null) {
+                        DiagnosticLog.failure("Bluetooth pairing window could not be opened over LAN")
                         android.util.Log.w("GalaxyPair", "Could not open StarPilot's window over Wi-Fi: $why")
                         if (!pairCancelled) runOnUiThread { message("Couldn't open StarPilot's pairing window over Wi-Fi ($why).\n\n$PAIR_STEPS Then try again.") }
                         return@Thread
@@ -1056,6 +1095,7 @@ class MainActivity : Activity() {
                     runOnUiThread { if (generation == connectionGeneration.get()) screen?.detail(windowNote.trim()) }
                 }
                 notReady?.let { blocked ->
+                    DiagnosticLog.failure("Comma Bluetooth readiness: ${blocked.code}")
                     hidePairProgress()
                     runOnUiThread {
                         if (generation == connectionGeneration.get()) {
@@ -1078,6 +1118,7 @@ class MainActivity : Activity() {
                     if (pairCancelled || generation != connectionGeneration.get()) return@Thread
                     pairing.save(claim.key, claim.id.ifEmpty { null })
                     pairing.rememberAudio(claim.adapterAddress)
+                    DiagnosticLog.record("Bluetooth app pairing verified and saved; musicSetupAvailable=${claim.adapterAddress.isNotEmpty()}")
                     transport.close()
                     hidePairProgress()
                     if (pairCancelled || generation != connectionGeneration.get()) return@Thread
@@ -1090,6 +1131,7 @@ class MainActivity : Activity() {
                     transport.close()
                     if (pairCancelled) return@Thread
                     android.util.Log.w("GalaxyPair", "Pairing failed", e)
+                    DiagnosticLog.failure("Bluetooth app pairing failed: ${e.javaClass.simpleName}")
                     runOnUiThread {
                         if (generation == connectionGeneration.get()) {
                             screen?.headline("Pairing didn't finish")
@@ -1112,12 +1154,15 @@ class MainActivity : Activity() {
             val device = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(android.bluetooth.BluetoothDevice.EXTRA_DEVICE, android.bluetooth.BluetoothDevice::class.java)
                 else @Suppress("DEPRECATION") intent.getParcelableExtra(android.bluetooth.BluetoothDevice.EXTRA_DEVICE)
             val state = intent.getIntExtra(android.bluetooth.BluetoothDevice.EXTRA_BOND_STATE, -1)
+            if (device?.address != null && device.address in listOfNotNull(pairing.audioAddress(), pairing.musicAddress()))
+                DiagnosticLog.record("Music Android bond state=$state")
             if (CommaBond.forgotten(pairing.musicAddress(), device?.address, state)) commaBondEnded("You forgot StarPilot in this phone's Bluetooth settings")
         }
     }
     private fun commaBondEnded(why: String) {
         if (pairing.load() == null) return
         android.util.Log.i("GalaxyPair", "Dropping the app pairing: $why")
+        DiagnosticLog.record("Bluetooth app pairing removed because the Android audio bond was forgotten")
         pairing.forget(); ble?.close()
         runOnUiThread {
             if (isFinishing || isDestroyed) return@runOnUiThread
@@ -1141,7 +1186,9 @@ class MainActivity : Activity() {
     @Volatile private var pairTransport: BleTransport? = null
     private fun showPairProgress(text: String, stage: Int? = null) = runOnUiThread {
         if (isFinishing || isDestroyed || pairCancelled) return@runOnUiThread
+        DiagnosticLog.record("Bluetooth setup stage=${stage ?: -1}: $text")
         val dialog = pairProgress ?: PairingProgressDialog(this) {
+            DiagnosticLog.record("Bluetooth setup cancelled by user")
             pairCancelled = true
             pairTransport?.close()
             pairProgress = null
@@ -1184,6 +1231,7 @@ class MainActivity : Activity() {
         if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) requestFeaturePermissions(permissions, 6, "Nearby devices") else runAutoPair()
     }
     private fun runAutoPair() {
+        DiagnosticLog.record("Bluetooth automatic app pairing started")
         val lan = Networks.commaLan(this) ?: return message("This phone isn't connected to StarPilot over Wi-Fi right now. Join StarPilot's Wi-Fi, then tap Add Bluetooth Phone Pairing in the menu.")
         if (!autoPairing.compareAndSet(false, true)) return
         pairCancelled = false
@@ -1192,6 +1240,7 @@ class MainActivity : Activity() {
             try {
                 LanPairing.waitUntilReady(lan.first, lan.second) { text -> showPairProgress("Waiting for StarPilot's Bluetooth to be ready…\n$text") }?.let { blocked ->
                     android.util.Log.w("GalaxyPair", "StarPilot not ready to pair: ${blocked.code}")
+                    DiagnosticLog.failure("Comma Bluetooth readiness: ${blocked.code}")
                     hidePairProgress()
                     if (!pairCancelled) runOnUiThread { message("StarPilot isn't ready to pair yet: ${blocked.message}\n\nTry Add Bluetooth Phone Pairing in the menu in a moment.") }
                     return@Thread
@@ -1200,6 +1249,7 @@ class MainActivity : Activity() {
                 showPairProgress("Opening StarPilot's pairing window over Wi-Fi…", 1)
                 LanPairing.openWindow(lan.first, lan.second)?.let { why ->
                     android.util.Log.w("GalaxyPair", "Could not open StarPilot's window over Wi-Fi: $why")
+                    DiagnosticLog.failure("Bluetooth pairing window could not be opened over LAN")
                     hidePairProgress()
                     if (!pairCancelled) runOnUiThread { message("Couldn't open StarPilot's pairing window over Wi-Fi ($why).\n\n$PAIR_STEPS Then tap Add Bluetooth Phone Pairing in the menu.") }
                     return@Thread
@@ -1213,6 +1263,7 @@ class MainActivity : Activity() {
                     if (pairCancelled) return@Thread
                     pairing.save(claim.key, claim.id.ifEmpty { null })
                     pairing.rememberAudio(claim.adapterAddress)
+                    DiagnosticLog.record("Bluetooth app pairing verified and saved; musicSetupAvailable=${claim.adapterAddress.isNotEmpty()}")
                     transport.close()
                     hidePairProgress()
                     if (!pairCancelled) runOnUiThread { offerMusic() }
@@ -1220,6 +1271,7 @@ class MainActivity : Activity() {
                     transport.close()
                     if (pairCancelled) return@Thread
                     android.util.Log.w("GalaxyPair", "Pairing failed", e)
+                    DiagnosticLog.failure("Bluetooth automatic pairing failed: ${e.javaClass.simpleName}")
                     runOnUiThread { message("Couldn't pair: ${e.message ?: "StarPilot didn't answer"}\n\n$PAIR_STEPS Then tap Add Bluetooth Phone Pairing in the menu.") }
                 }
             } finally {
@@ -1244,6 +1296,8 @@ class MainActivity : Activity() {
         if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) requestFeaturePermissions(permissions, 7, "Nearby devices") else runMusicOnly()
     }
     private fun runMusicOnly() {
+        DiagnosticLog.musicStatus = "Music setup requested"
+        DiagnosticLog.record("Music setup requested")
         val address = pairing.audioAddress() ?: return message("Pair the app with StarPilot first.")
         val lan = Networks.commaLan(this)
         if (!autoPairing.compareAndSet(false, true)) return
@@ -1253,6 +1307,8 @@ class MainActivity : Activity() {
             try {
                 // Without Wi-Fi, rely on Pair phone already being open on StarPilot.
                 if (lan != null) LanPairing.openWindow(lan.first, lan.second)?.let { why ->
+                    DiagnosticLog.musicStatus = "Pairing window could not be opened over LAN"
+                    DiagnosticLog.failure("Music pairing window could not be opened over LAN")
                     hidePairProgress()
                     if (!pairCancelled) runOnUiThread { message("Couldn't open StarPilot's pairing window over Wi-Fi ($why).") }
                     return@Thread
@@ -1260,6 +1316,9 @@ class MainActivity : Activity() {
                 if (pairCancelled) return@Thread
                 showPairProgress("Approve the Bluetooth music prompt on this phone if it asks.", 4)
                 val outcome = bondMusic(address)
+                DiagnosticLog.musicStatus = outcome.name
+                DiagnosticLog.record("Music setup outcome=${outcome.name}")
+                if (outcome == MusicBond.Outcome.FAILED) DiagnosticLog.failure("Music bonding failed or approval timed out")
                 if (outcome == MusicBond.Outcome.PAIRED || outcome == MusicBond.Outcome.ALREADY_PAIRED) pairing.rememberMusic(address)
                 hidePairProgress()
                 if (!pairCancelled) runOnUiThread { message(MusicBond.message(outcome) ?: "Music isn't supported by this StarPilot version.") }
@@ -1268,16 +1327,22 @@ class MainActivity : Activity() {
     }
     private fun bondMusic(address: String): MusicBond.Outcome {
         val adapter = getSystemService(BluetoothManager::class.java)?.adapter
-        if (adapter == null || !adapter.isEnabled) return MusicBond.Outcome.FAILED
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return MusicBond.Outcome.FAILED
+        if (adapter == null || !adapter.isEnabled) { DiagnosticLog.failure("Music setup: Bluetooth adapter unavailable or off"); return MusicBond.Outcome.FAILED }
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            DiagnosticLog.failure("Music setup: Nearby devices permission missing"); return MusicBond.Outcome.FAILED
+        }
         return try {
             // Comma presents as a speaker while its window is open. Seeing it in a normal Bluetooth scan first makes
             // Android bond over classic audio Bluetooth, the way tapping comma in Bluetooth settings does.
             runCatching { discoverComma(adapter, address) }.onFailure { android.util.Log.w("GalaxyPair", "Bluetooth scan before music bond failed", it) }
             MusicBond({ adapter.bondedDevices.map { it.address.uppercase() }.toSet() }, {
-                adapter.getRemoteDevice(it).createBond().also { started -> android.util.Log.i("GalaxyPair", "createBond($it) started=$started") }
+                adapter.getRemoteDevice(it).createBond().also { started ->
+                    DiagnosticLog.record("Music Android bond request accepted=$started")
+                    android.util.Log.i("GalaxyPair", "createBond($it) started=$started")
+                }
             }).run(address)
         } catch (e: Exception) {
+            DiagnosticLog.failure("Music bond failed: ${e.javaClass.simpleName}")
             android.util.Log.w("GalaxyPair", "Music bond failed", e)
             MusicBond.Outcome.FAILED
         }
@@ -1296,7 +1361,9 @@ class MainActivity : Activity() {
         val filter = android.content.IntentFilter(android.bluetooth.BluetoothDevice.ACTION_FOUND)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_EXPORTED) else registerReceiver(receiver, filter)
         try {
-            if (adapter.startDiscovery()) seen.await(millis, java.util.concurrent.TimeUnit.MILLISECONDS)
+            val started = adapter.startDiscovery()
+            DiagnosticLog.record("Music classic Bluetooth discovery started=$started")
+            if (started) DiagnosticLog.record("Music classic Bluetooth device found=${seen.await(millis, java.util.concurrent.TimeUnit.MILLISECONDS)}")
         } finally {
             runCatching { adapter.cancelDiscovery() }
             runCatching { unregisterReceiver(receiver) }
@@ -1395,6 +1462,7 @@ class MainActivity : Activity() {
                 runOnUiThread { if (!isFinishing && generation == connectionGeneration.get()) showBluetooth(transport) else transport.close() }
             } catch (e: Exception) {
                 transport.close()
+                DiagnosticLog.failure("Bluetooth connection: ${e.javaClass.simpleName}")
                 if (e is PairingNotRecognized) { pairing.markStale(); android.util.Log.w("GalaxyPair", "Pairing not recognized by StarPilot: ${e.message}") }
                 runOnUiThread {
                     if (automatic && !isFinishing && generation == connectionGeneration.get() && fallbackFrom(Route.BLUETOOTH)) return@runOnUiThread
