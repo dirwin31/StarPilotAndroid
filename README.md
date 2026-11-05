@@ -97,7 +97,7 @@ LAN import and **Show automatic import prompt** remain available in Connections.
 
 ## Send a support report
 
-Open **More options → Connection status → Report a problem**. Connect with Discord
+Open **More options → Debugging options → Report a problem**. Connect with Discord
 in your browser, describe the problem, and choose a new thread or one of your
 existing Android report threads. Tap **Send report** to capture diagnostics and submit the report directly.
 You can inspect the captured diagnostics afterward using **Review saved report**.

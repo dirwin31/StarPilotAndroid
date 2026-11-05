@@ -570,28 +570,27 @@ class MainActivity : Activity() {
             .onOrder { order -> prefs.edit().putString("routeOrder", order.joinToString(",") { it.key }).apply() }
             .onTransport { prefs.edit().putString("transport", it.key).apply(); connect() }
             .group("Remote access") {
-                action("Scan Galaxy QR code", "Scan the App key on StarPilot → Galaxy → Access") { scanRemoteKey() }
-                action("Paste Galaxy App key") { addRemoteKey() }
-                action("Import remote key from LAN", "Save the App key from Galaxy on your local network") { importRemoteKey() }
-                if (!prefs.getBoolean("askRemoteImport", true)) action("Show automatic import prompt", "Ask about LAN import when setting up Remote") {
-                    prefs.edit().putBoolean("askRemoteImport", true).apply()
-                    message("Automatic import prompt enabled.")
-                }
-                action("Sign in with Galaxy ID", "Use your Galaxy ID and password") { signInRemote() }
-                action("Remote key", if (tunnel.load() == null) "No key saved · set up from the Remote route on the connection screen"
-                    else if (tunnel.verified()) "Verified for firestar.link" else "Saved · verification pending") {
-                    AlertDialog.Builder(this@MainActivity).setTitle("Remote access")
-                        .setMessage("Remote connects through firestar.link when local Wi-Fi is unavailable. The Remote route can import your key over LAN. You can also scan its QR code, paste the App key, or sign in here.")
-                        .setPositiveButton("Done", null).show()
-                }
-                if (tunnel.load() != null) action("Forget remote key", danger = true) {
-                    remotePairingRevision++; prefs.edit().putBoolean("autoImportRemoteKey", false).apply(); tunnel.clear(); if (activeRoute == Route.TUNNEL) connect()
+                if (tunnel.load() != null) {
+                    action("Forget remote key", danger = true) {
+                        remotePairingRevision++; prefs.edit().putBoolean("autoImportRemoteKey", false).apply(); tunnel.clear(); if (activeRoute == Route.TUNNEL) connect()
+                    }
+                } else {
+                    action("Scan Galaxy QR code", "Scan the App key on StarPilot → Galaxy → Access") { scanRemoteKey() }
+                    action("Paste Galaxy App key") { addRemoteKey() }
+                    action("Import remote key from LAN", "Save the App key from Galaxy on your local network") { importRemoteKey() }
+                    if (!prefs.getBoolean("askRemoteImport", true)) action("Show automatic import prompt", "Ask about LAN import when setting up Remote") {
+                        prefs.edit().putBoolean("askRemoteImport", true).apply()
+                        message("Automatic import prompt enabled.")
+                    }
+                    action("Sign in with Galaxy ID", "Use your Galaxy ID and password") { signInRemote() }
+                    action("Remote key", "No key saved · set up from the Remote route on the connection screen") {
+                        AlertDialog.Builder(this@MainActivity).setTitle("Remote access")
+                            .setMessage("Remote connects through firestar.link when local Wi-Fi is unavailable. The Remote route can import your key over LAN. You can also scan its QR code, paste the App key, or sign in here.")
+                            .setPositiveButton("Done", null).show()
+                    }
                 }
             }
             .group("Connection status") {
-                action("Report a problem", "Connect Discord and send a support report") {
-                    startActivity(Intent(this@MainActivity, DiscordReportActivity::class.java))
-                }
                 action("View route details", "See the latest result for each connection route") {
                     val details = Route.entries.joinToString("\n") { route ->
                         "${route.title}: ${routeDetails[route] ?: "Not checked"}"
@@ -634,6 +633,9 @@ class MainActivity : Activity() {
                 }
             }
             .group("Debugging options") {
+                action("Report a problem", "Connect Discord and send a support report") {
+                    startActivity(Intent(this@MainActivity, DiscordReportActivity::class.java))
+                }
                 action("Notification details", "View push registration and delivery status") {
                     val token = prefs.getString("fcmToken", "").orEmpty()
                     val details = "Registered: ${prefs.getString("fcmRegisteredOrigin", "")}\n${prefs.getString("fcmAcknowledgement", "")}\nLast push: ${prefs.getLong("sentryLastPushAt", 0)}\nLast poll: ${prefs.getLong("sentryLastPollAt", 0)}"
