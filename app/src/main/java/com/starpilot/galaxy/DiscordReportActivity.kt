@@ -4,6 +4,11 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.view.Gravity
+import android.view.ViewGroup
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -29,6 +34,7 @@ class DiscordReportActivity : Activity() {
     private var target: String? = null
     private var threads = emptyList<DiscordReportClient.ThreadEntry>()
     private var status = ""
+    private lateinit var content: LinearLayout
     private lateinit var body: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -64,12 +70,47 @@ class DiscordReportActivity : Activity() {
     }
 
     private fun dp(value: Int) = (resources.displayMetrics.density * value).toInt()
+    private fun rounded(color: Int = Palette.SPACE, stroke: Int = Palette.LINE) = GradientDrawable().apply {
+        cornerRadius = dp(18).toFloat(); setColor(color); setStroke(dp(1), stroke)
+    }
     private fun text(value: String, size: Float = 15f) = TextView(this).apply {
-        text = value; textSize = size; setTextColor(Palette.ON)
-        setPadding(0, dp(8), 0, dp(8))
+        text = value; textSize = size; setTextColor(Palette.MUTED)
+        setLineSpacing(dp(2).toFloat(), 1f)
+        setPadding(dp(16), dp(12), dp(16), dp(12))
+    }
+    private fun section(title: String) {
+        content.addView(text(title, 14f).apply {
+            setTextColor(Palette.VIOLET_SOFT); typeface = Palette.medium
+            setPadding(dp(4), dp(24), dp(4), dp(8))
+        })
+        body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; background = rounded(); clipToOutline = true
+            elevation = dp(8).toFloat()
+        }
+        content.addView(body, LinearLayout.LayoutParams(-1, -2))
     }
     private fun button(label: String, action: () -> Unit) {
-        body.addView(Button(this).apply { text = label; isEnabled = !busy; setOnClickListener { action() } })
+        val primary = label in setOf("Send report", "Connect with Discord", "Start another report")
+        val back = label == "Back to Galaxy"
+        val outlined = back || label == "Refresh my report threads"
+        val danger = label in setOf("Disconnect Discord", "Discard saved report")
+        if (!primary && !outlined && body !== content && body.childCount > 0) {
+            body.addView(View(this).apply { setBackgroundColor(Palette.LINE) },
+                LinearLayout.LayoutParams(-1, dp(1)).apply { marginStart = dp(16) })
+        }
+        body.addView(Button(this).apply {
+            text = if (back) "‹  $label" else label; contentDescription = label; textSize = 16f; typeface = Palette.medium; isAllCaps = false
+            isEnabled = !busy; alpha = if (busy) 0.45f else 1f
+            setTextColor(if (primary) Palette.SPACE else if (danger) Palette.ERROR else if (outlined) Palette.VIOLET_SOFT else Palette.ON)
+            gravity = if (primary || outlined) Gravity.CENTER else Gravity.CENTER_VERTICAL or Gravity.START
+            minHeight = dp(56); minimumHeight = dp(56); stateListAnimator = null
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = RippleDrawable(ColorStateList.valueOf(Palette.alpha(Palette.VIOLET, 60)),
+                if (primary) rounded(Palette.VIOLET_SOFT) else if (outlined) rounded(Palette.alpha(Palette.VIOLET, 20), Palette.alpha(Palette.VIOLET, 110)) else GradientDrawable().apply { setColor(Palette.SPACE) }, null)
+            setOnClickListener { action() }
+        }, LinearLayout.LayoutParams(-1, -2).apply {
+            if (primary || outlined) { setMargins(dp(12), dp(12), dp(12), dp(12)) }
+        })
     }
 
     private fun render() {
@@ -77,9 +118,11 @@ class DiscordReportActivity : Activity() {
         body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             isFocusableInTouchMode = true
-            setPadding(dp(20), dp(16), dp(20), dp(24)); setBackgroundColor(Palette.SPACE)
+            setPadding(dp(20), dp(16), dp(20), dp(24)); setBackgroundColor(Palette.SURFACE)
         }
+        content = body
         val scroll = ScrollView(this).apply {
+            setBackgroundColor(Palette.SURFACE)
             isFillViewport = true; addView(body)
             setOnApplyWindowInsetsListener { view, insets ->
                 val bars = systemBarInsets(insets)
@@ -88,26 +131,44 @@ class DiscordReportActivity : Activity() {
             }
         }
         setContentView(scroll)
-        body.addView(text("Report a problem", 24f))
-        body.addView(text("Your description and Discord identity appear in a public support thread. Diagnostics go to the private maintainer channel. Tap Send report to submit your description and diagnostics. Do not include passwords, App keys, or other private information in your description."))
-        if (busy) body.addView(ProgressBar(this))
-        if (status.isNotEmpty()) body.addView(text(status))
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = window.decorView.systemUiVisibility and
+            (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR).inv()
+        content.addView(text("Report a problem", 24f).apply {
+            typeface = Palette.condensed; setTextColor(Palette.ON); setPadding(dp(4), dp(6), dp(4), dp(4))
+        })
+        val threadsUpdated = status == "Report threads updated."
+        content.addView(text(if (threadsUpdated) "✓ Report threads updated" else "Get help with Galaxy", 13f).apply {
+            setPadding(dp(4), 0, dp(4), dp(4))
+            if (threadsUpdated) setTextColor(Palette.MUTED)
+        })
+        if (busy) body.addView(ProgressBar(this).apply {
+            indeterminateTintList = ColorStateList.valueOf(Palette.VIOLET_SOFT)
+        }, LinearLayout.LayoutParams(dp(28), dp(28)).apply { gravity = Gravity.CENTER; bottomMargin = dp(12) })
+        if (status.isNotEmpty() && !threadsUpdated) body.addView(text(status).apply { setTextColor(Palette.VIOLET_SOFT) })
         try {
             val credentials = store.credentials()
-            body.addView(text(if (credentials == null) "Connect Discord to send a report." else "Discord connected · ${credentials.userId}"))
-            if (credentials == null) {
-                button("Connect with Discord", ::login)
-                button("Cancel sign-in") { store.cancelLogin(); status = "Sign-in cancelled."; render() }
-            } else {
-                button("Reconnect Discord", ::login)
-                button("Disconnect Discord", ::disconnect)
-            }
             val pending = store.pending()
+            section(if (pending == null) "Your report" else "Report status")
             if (pending != null) renderPending(pending, credentials) else renderDraft(credentials)
         } catch (_: Exception) {
             body.addView(text("Saved Discord data could not be read. Reopen the app or check Android's storage settings. Check Discord before clearing app data, since a saved report may already have arrived."))
         }
+        body = content
+        content.addView(View(this), LinearLayout.LayoutParams(1, dp(20)))
         button("Back to Galaxy") { finish() }
+        section("Discord account")
+        runCatching { store.credentials() }.onSuccess { credentials ->
+            body.addView(text(if (credentials == null) "Connect Discord to send a report." else "Discord connected · ${credentials.userId}"))
+            if (credentials == null) button("Connect with Discord", ::login)
+            else button("Disconnect Discord") {
+                AlertDialog.Builder(this).setTitle("Disconnect Discord?")
+                    .setMessage("You'll need to connect Discord again to send reports. Your saved report will stay on this phone.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Disconnect") { _, _ -> disconnect() }
+                    .show()
+            }
+        }.onFailure { body.addView(text("Saved Discord account could not be read.")) }
     }
 
     private fun renderDraft(credentials: DiscordReportClient.Credentials?) {
@@ -115,6 +176,9 @@ class DiscordReportActivity : Activity() {
         body.addView(EditText(this).apply {
             setText(description); hint = "What were you doing, and what went wrong?"
             setTextColor(Palette.ON); setHintTextColor(Palette.MUTED)
+            textSize = 16f; gravity = Gravity.TOP or Gravity.START
+            background = rounded(Palette.SURFACE, Palette.alpha(Palette.VIOLET, 100))
+            setPadding(dp(14), dp(14), dp(14), dp(14))
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             minLines = 3; maxLines = 8; filters = arrayOf(InputFilter.LengthFilter(1000)); isEnabled = !busy
             addTextChangedListener(object : TextWatcher {
@@ -122,19 +186,30 @@ class DiscordReportActivity : Activity() {
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { description = s.toString() }
                 override fun afterTextChanged(s: Editable?) {}
             })
-        })
+        }, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(12), 0, dp(12), dp(8)) })
         body.addView(text("Post to"))
         body.addView(Spinner(this).apply {
-            adapter = ArrayAdapter(this@DiscordReportActivity, android.R.layout.simple_spinner_dropdown_item,
-                listOf("New support thread") + threads.map { it.title })
+            background = rounded(Palette.SURFACE)
+            minimumHeight = dp(56)
+            adapter = object : ArrayAdapter<String>(this@DiscordReportActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf("New support thread") + threads.map { it.title }) {
+                private fun row(position: Int, dropdown: Boolean) = text(getItem(position).orEmpty() + if (dropdown) "" else "  ▾", 15f).apply {
+                    setTextColor(Palette.ON); typeface = Palette.medium; minHeight = dp(56)
+                    gravity = Gravity.CENTER_VERTICAL
+                    if (dropdown) setBackgroundColor(Palette.SURFACE)
+                }
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View = row(position, false)
+                override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View = row(position, true)
+            }
             setSelection(threads.indexOfFirst { it.id == target }.let { if (it < 0) 0 else it + 1 })
             isEnabled = !busy
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { target = threads.getOrNull(position - 1)?.id }
                 override fun onNothingSelected(parent: AdapterView<*>?) { target = null }
             }
-        })
+        }, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(12), 0, dp(12), dp(8)) })
         if (credentials != null) button("Refresh my report threads", ::loadThreads)
+        body.addView(text("Your description and Discord identity are public in the StarPilot Discord. Diagnostics are private. Don’t include passwords or App keys.", 13f))
         button("Send report") {
             if (credentials == null) { status = "Connect with Discord first."; render(); return@button }
             if (description.isBlank()) { status = "Add a short description first."; render(); return@button }
@@ -178,6 +253,10 @@ class DiscordReportActivity : Activity() {
         }
         if (pending.retryAllowed() && sameUser) button("Review and retry saved report") { preview(pending) { send(pending) } }
         button(if (pending.state == "sent") "Start another report" else "Discard saved report") {
+            if (pending.state == "sent") {
+                store.pending(null); description = ""; status = ""; render(); loadThreads()
+                return@button
+            }
             AlertDialog.Builder(this).setTitle("Clear saved report?")
                 .setMessage("This only removes the copy on this phone. Check Discord first if delivery was unconfirmed. It does not remove anything already posted.")
                 .setNegativeButton("Keep", null).setPositiveButton("Clear") { _, _ ->
@@ -238,10 +317,10 @@ class DiscordReportActivity : Activity() {
         if (busy || runCatching { store.credentials() }.getOrNull() == null) return
         task({
             val credentials = authorization()
-            if (credentials == null) "Couldn't refresh Discord sign-in. Check your connection or reconnect Discord."
+            if (credentials == null) "Couldn't refresh Discord sign-in. Check your connection, or disconnect and connect Discord again."
             else {
                 val result = client.reports(credentials.access)
-                if (result == null) "Couldn't load report threads. Check your connection or reconnect Discord."
+                if (result == null) "Couldn't load report threads. Check your connection, or disconnect and connect Discord again."
                 else { threads = result; "Report threads updated." }
             }
         })
