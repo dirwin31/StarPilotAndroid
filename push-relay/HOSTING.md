@@ -8,7 +8,7 @@ Get these through a password manager or another private channel, never chat or e
 
 - This `push-relay` folder.
 - The Firebase service-account key: `starpilot-sentry-….json`.
-- For iPhone: Nate's Apple **Team ID**, **Key ID** and `AuthKey_<KeyID>.p8`. If they aren't ready yet, set them up later (step 5). Android works without them.
+- iPhone keys are **on hold**. Cloudflare Workers can't open the HTTP/2 connection Apple requires, so the iPhone route is being changed. Skip the Apple secrets in step 5 until Danny confirms. Android doesn't need them.
 
 ## Set up (one time)
 
@@ -44,7 +44,7 @@ Get these through a password manager or another private channel, never chat or e
    npx wrangler@4 secret put ENROLLMENT_ADMIN_SECRET
    ```
 
-   For iPhone alerts, also run:
+   Only if Danny tells you the iPhone route needs them, also run:
 
    ```sh
    npx wrangler@4 secret put APNS_PRIVATE_KEY < /path/to/AuthKey_<KeyID>.p8
@@ -68,7 +68,7 @@ Get these through a password manager or another private channel, never chat or e
 
 8. **Delete your local copies** of the `.json` and `.p8` key files. Cloudflare keeps the only copy it needs.
 
-iPhone delivery has no automatic check. Once a StarPilot release has the URL, enable alerts on an iPhone and use **Send test** in Galaxy → Sentry.
+Before Danny ships the URL to everyone, try one comma first: run `node operator.mjs invite`, enter the code and relay URL under Galaxy → Sentry → Custom relay, then use **Send test** to an Android phone.
 
 ## Day to day
 
