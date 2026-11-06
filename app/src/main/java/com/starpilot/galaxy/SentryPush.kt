@@ -126,9 +126,10 @@ object SentryPush {
         val title = when (data["kind"]) { "alarm" -> "Sentry alarm"; "test" -> "Galaxy test alert"; else -> "Sentry: motion detected" }
         val builder = Notification.Builder(ctx, Notifications.SENTRY_CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle(title).setContentText(data["label"].orEmpty().take(64)).setAutoCancel(true).setContentIntent(open)
+            .setOnlyAlertOnce(true)
         if (data["kind"] == "alarm") builder.setCategory(Notification.CATEGORY_ALARM)
-        manager.notify(notificationId, builder.build())
-        if (!demo) {
+        if (demo) manager.notify(notificationId, builder.build())
+        else {
             p.edit().putString("sentrySeenIds", JSONArray(dedupe.ids()).toString())
                 .putLong("sentryLastSeenNs", maxOf(p.getLong("sentryLastSeenNs", 0), (data["wallTimeNs"]?.toLongOrNull() ?: 0).coerceIn(0, System.currentTimeMillis() * 1000000)))
                 .apply { if (fromPush) putLong("sentryLastPushAt", System.currentTimeMillis()) }.commit()
@@ -147,13 +148,15 @@ object SentryPush {
                     wide to cabin
                 }
                 Thread(images).apply { isDaemon = true; start() }
-                try {
-                    val (wide, cabin) = images.get(if (test) 35L else 8L, java.util.concurrent.TimeUnit.SECONDS) ?: return@Thread
-                    if (suspended || (wide == null && cabin == null)) return@Thread
-                    cabin?.let { builder.setLargeIcon(it) }
-                    wide?.let { builder.setStyle(Notification.BigPictureStyle().bigPicture(it)) }
-                    manager.notify(notificationId, builder.build())
-                } catch (_: Exception) {} finally { images.cancel(true) }
+                fun post(result: Pair<Bitmap?, Bitmap?>?) {
+                    result?.first?.let { builder.setStyle(Notification.BigPictureStyle().bigPicture(it)) }
+                    result?.second?.let { builder.setLargeIcon(it) }
+                    if (!suspended) manager.notify(notificationId, builder.build())
+                }
+                val unit = java.util.concurrent.TimeUnit.SECONDS
+                try { post(images.get(if (test) 12L else 5L, unit)); return@Thread } catch (_: Exception) { post(null) }
+                try { images.get(if (test) 23L else 3L, unit)?.takeIf { it.first != null || it.second != null }?.let(::post) }
+                catch (_: Exception) {} finally { images.cancel(true) }
             }.start()
         }
         return true
