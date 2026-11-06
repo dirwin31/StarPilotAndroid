@@ -154,8 +154,8 @@ object SentryPush {
                     if (!suspended) manager.notify(notificationId, builder.build())
                 }
                 val unit = java.util.concurrent.TimeUnit.SECONDS
-                try { post(images.get(if (test) 12L else 5L, unit)); return@Thread } catch (_: Exception) { post(null) }
-                try { images.get(if (test) 23L else 3L, unit)?.takeIf { it.first != null || it.second != null }?.let(::post) }
+                try { post(images.get(if (test) 20L else 5L, unit)); return@Thread } catch (_: Exception) { post(null) }
+                try { images.get(if (test) 15L else 3L, unit)?.takeIf { it.first != null || it.second != null }?.let(::post) }
                 catch (_: Exception) {} finally { images.cancel(true) }
             }.start()
         }
