@@ -1,4 +1,4 @@
-const androidApps = new Set(['link.firestar.companion', 'com.starpilot.galaxy'])
+const androidApps = new Set(['com.starpilot.galaxy'])
 const defaultIosApps = 'link.galaxy.bluetooth.natehuby76'
 export const iosApps = env => new Set(String(env?.IOS_APP_IDS ?? defaultIosApps).split(',').map(id => id.trim()).filter(Boolean))
 const kinds = new Set(['warning', 'alarm', 'test'])
@@ -6,6 +6,23 @@ const encode = value => new TextEncoder().encode(value)
 const b64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 const json = (status, value) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } })
 let oauth = null
+const imported = new Map()
+
+async function importApns(body, token, fetcher) {
+  const apns = /^apns\.(production|sandbox)\.([a-f0-9]{32,512})$/.exec(body.token)
+  if (!apns || apns[2].length % 2) return null
+  const key = `${body.appId}:${body.token}`
+  if (imported.has(key)) return imported.get(key)
+  const response = await fetcher('https://iid.googleapis.com/iid/v1:batchImport', { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(5000),
+    headers: { Authorization: `Bearer ${token}`, access_token_auth: 'true', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ application: body.appId, sandbox: apns[1] === 'sandbox', apns_tokens: [apns[2]] }) })
+  if (!response.ok) throw new Error('Token import unavailable')
+  const result = (await response.json()).results?.[0]
+  if (result?.status !== 'OK' || typeof result.registration_token !== 'string') throw new Error('Token import failed')
+  if (imported.size >= 1000) imported.clear()
+  imported.set(key, result.registration_token)
+  return result.registration_token
+}
 
 export function valid(body, ios = new Set()) {
   return body !== null && typeof body === 'object' && !Array.isArray(body) &&
@@ -73,15 +90,21 @@ export async function handle(request, env, fetcher = fetch, authorize = accessTo
     if (count >= 30) return json(429, { error: 'Rate limited' })
     await env.RATE.put(key, String(count + 1), { expirationTtl: 7200 })
     if (!/^[a-z0-9][a-z0-9-]{4,61}[a-z0-9]$/.test(env.FCM_PROJECT_ID)) throw new Error('Invalid project')
+    const ios = iosApps(env).has(body.appId)
     const token = await authorize(env, fetcher)
+    let destination = body.token
+    if (ios && body.token.startsWith('apns.')) {
+      destination = await importApns(body, token, fetcher)
+      if (!destination) return json(400, { error: 'Invalid Apple token' })
+    }
     const response = await fetcher(`https://fcm.googleapis.com/v1/projects/${env.FCM_PROJECT_ID}/messages:send`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(fcmMessage(body, iosApps(env).has(body.appId))), signal: AbortSignal.timeout(5000), redirect: 'error',
+      body: JSON.stringify(fcmMessage({ ...body, token: destination }, ios)), signal: AbortSignal.timeout(5000), redirect: 'manual',
     })
     if (response.ok) return json(200, { ok: true })
     const failure = await response.json().catch(() => ({}))
     const codes = (failure.error?.details || []).filter(detail => detail['@type'] === 'type.googleapis.com/google.firebase.fcm.v1.FcmError').map(detail => detail.errorCode)
-    if (codes.includes('UNREGISTERED') || codes.includes('INVALID_ARGUMENT')) return json(410, { error: 'Token expired' })
+    if (codes.includes('UNREGISTERED') || codes.includes('INVALID_ARGUMENT')) { imported.delete(`${body.appId}:${body.token}`); return json(410, { error: 'Token expired' }) }
     return json(response.status === 429 ? 429 : 502, { error: 'FCM unavailable' })
   } catch { return json(502, { error: 'Relay unavailable' }) }
 }

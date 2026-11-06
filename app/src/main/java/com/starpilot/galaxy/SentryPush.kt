@@ -5,6 +5,7 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import org.json.JSONArray
@@ -22,13 +23,15 @@ object SentryPush {
             java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { byte -> "%02x".format(byte) }.take(12)
         }.orEmpty()
         return JSONObject().put("id", id).put("available", FirebaseRegistration.available).put("enabled", p.getBoolean("sentryPushEnabled", false))
-            .put("registered", p.getString("fcmRegisteredOrigin", "").orEmpty().isNotEmpty()).toString()
+            .put("registered", p.getString("fcmRegisteredOrigin", "").orEmpty().isNotEmpty())
+            .put("status", p.getString("fcmAcknowledgement", "Enable phone alerts, then enroll the relay in Galaxy → Sentry.")).toString()
     }
     fun enable(ctx: Context, on: Boolean): Boolean {
         if (on && !permitted(ctx)) return false
         val p = prefs(ctx)
         if (on && !p.contains("sentryLastSeenNs")) p.edit().putLong("sentryLastSeenNs", System.currentTimeMillis() * 1000000).apply()
-        p.edit().putBoolean("sentryPushEnabled", on).apply()
+        p.edit().putBoolean("sentryPushEnabled", on).putBoolean("sentryEnrollRequested", on).apply()
+        if (on && !FirebaseRegistration.available) p.edit().putString("fcmAcknowledgement", "Polling only: Firebase is not configured in this build").apply()
         if (on) { FirebaseRegistration.start(ctx); SentryPollJob.schedule(ctx); api?.let { registerIfNeeded(ctx, it) } }
         else {
             FirebaseRegistration.stop(ctx)
@@ -48,17 +51,65 @@ object SentryPush {
         if (suspended) return
         api = current
         val p = prefs(ctx)
-        if (!p.getBoolean("sentryPushEnabled", false)) return
+        if (!p.getBoolean("sentryPushEnabled", false)) {
+            val registrationKey = "fcmSubscription:" + current.origin
+            Thread { synchronized(this) { runCatching {
+                if (!p.getBoolean("sentryPushEnabled", false)) {
+                    val previous = p.getString(registrationKey, "").orEmpty()
+                    if (previous.isNotEmpty()) {
+                        current.request("/api/sentry/notifications", JSONObject().put("action", "appUnsubscribe").put("token", previous))
+                        p.edit().remove(registrationKey).apply()
+                    }
+                }
+            } } }.start()
+            return
+        }
         val token = p.getString("fcmToken", "").orEmpty()
         if (!FirebaseRegistration.available || token.isEmpty()) return
-        Thread { runCatching {
-            val result = current.request("/api/sentry/notifications", JSONObject().put("action", "appSubscribe").put("token", token)
-                .put("appId", BuildConfig.APPLICATION_ID).put("label", Build.MODEL.take(64)))
-            if (p.getBoolean("sentryPushEnabled", false) && p.getString("fcmToken", "") == token) {
-                p.edit().putString("fcmRegisteredOrigin", current.origin).putString("fcmAcknowledgement", if (result.optBoolean("appPushAvailable")) "Registered" else "Polling; relay not configured").apply()
+        Thread { synchronized(this) { runCatching {
+            if (!p.getBoolean("sentryPushEnabled", false) || p.getString("fcmToken", "") != token) return@runCatching
+            val registrationKey = "fcmSubscription:" + current.origin
+            val previous = p.getString(registrationKey, "").orEmpty()
+            if (previous.isNotEmpty() && previous != token) {
+                current.request("/api/sentry/notifications", JSONObject().put("action", "appUnsubscribe").put("token", previous))
+                p.edit().remove(registrationKey).apply()
             }
-        }.onFailure { p.edit().putString("fcmAcknowledgement", "Registration failed").apply() } }.start()
+            var result = current.request("/api/sentry/notifications", JSONObject().put("action", "appSubscribe").put("token", token)
+                .put("appId", BuildConfig.APPLICATION_ID).put("label", Build.MODEL.take(64)))
+            p.edit().putString(registrationKey, token).apply()
+            result = enrollIfRequested(ctx, current, result)
+            if (p.getBoolean("sentryPushEnabled", false) && p.getString("fcmToken", "") == token) {
+                p.edit().putString("fcmRegisteredOrigin", current.origin).putString("fcmAcknowledgement", relayStatus(result)).apply()
+            } else {
+                current.request("/api/sentry/notifications", JSONObject().put("action", "appUnsubscribe").put("token", token))
+                p.edit().remove(registrationKey).apply()
+            }
+        }.onFailure { p.edit().putString("fcmAcknowledgement", "Registration failed; reconnect to retry").apply() } } }.start()
     }
+
+    internal fun enrollIfRequested(ctx: Context, current: SentryApi, snapshot: JSONObject): JSONObject {
+        val p = prefs(ctx)
+        var result = snapshot
+        if (p.getBoolean("sentryEnrollRequested", false) && p.getBoolean("sentryPushEnabled", false)) {
+            val enrollment = result.optJSONObject("relayEnrollment")
+            if (enrollment?.optBoolean("automaticConfigured") == true || enrollment?.optString("state") in listOf("enrolling", "enrolled", "rotating", "confirming")) {
+                result = current.request("/api/sentry/notifications", JSONObject().put("action", "relayEnroll").put("confirmed", true))
+                p.edit().putBoolean("sentryEnrollRequested", false).apply()
+            } else if (enrollment == null) p.edit().putBoolean("sentryEnrollRequested", false).apply()
+        }
+        return result
+    }
+    internal fun relayStatus(result: JSONObject): String {
+        return when (result.optJSONObject("relayEnrollment")?.optString("state")) {
+            "enrolling", "rotating", "confirming" -> "Phone registered; waiting for relay enrollment in Galaxy → Sentry"
+            "unenrolled", "revoked" -> if (result.optJSONObject("relayEnrollment")?.optBoolean("automaticConfigured") == true) "Enable alerts to enroll this comma automatically" else "Phone registered; hosted alerts are not configured in this release yet"
+            "revoking" -> "Relay revocation pending; push alerts paused"
+            "actionRequired" -> "Relay authorization needs attention in Galaxy → Sentry"
+            else -> if (result.optBoolean("appPushAvailable")) "Registered; send a test from Galaxy → Sentry" else "Polling; relay not configured"
+        }
+    }
+    private fun decode(bytes: ByteArray, sample: Int): Bitmap? =
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
     @Synchronized fun receive(ctx: Context, data: Map<String, String>, fromPush: Boolean = true, demo: Boolean = false): Boolean {
         val p = prefs(ctx)
         if (!demo && suspended) return false
@@ -75,22 +126,37 @@ object SentryPush {
         val title = when (data["kind"]) { "alarm" -> "Sentry alarm"; "test" -> "Galaxy test alert"; else -> "Sentry: motion detected" }
         val builder = Notification.Builder(ctx, Notifications.SENTRY_CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle(title).setContentText(data["label"].orEmpty().take(64)).setAutoCancel(true).setContentIntent(open)
+            .setOnlyAlertOnce(true)
         if (data["kind"] == "alarm") builder.setCategory(Notification.CATEGORY_ALARM)
-        manager.notify(notificationId, builder.build())
-        if (!demo) {
+        if (demo) manager.notify(notificationId, builder.build())
+        else {
             p.edit().putString("sentrySeenIds", JSONArray(dedupe.ids()).toString())
                 .putLong("sentryLastSeenNs", maxOf(p.getLong("sentryLastSeenNs", 0), (data["wallTimeNs"]?.toLongOrNull() ?: 0).coerceIn(0, System.currentTimeMillis() * 1000000)))
                 .apply { if (fromPush) putLong("sentryLastPushAt", System.currentTimeMillis()) }.commit()
+            val test = data["kind"] == "test"
             Thread {
-                val image = java.util.concurrent.FutureTask {
-                    val current = api ?: SentryApi.best(ctx)
-                    current?.bytes("/api/sentry/image/$id/wide")?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                val images = java.util.concurrent.FutureTask {
+                    val current = api ?: SentryApi.best(ctx) ?: return@FutureTask null
+                    val wide = if (test) null else runCatching { decode(current.bytes("/api/sentry/image/$id/wide"), 1) }.getOrNull()
+                    val cabin = runCatching {
+                        decode(if (test) current.bytes("/api/cameras/snapshot", JSONObject().put("camera", "cabin"), 30000)
+                               else current.bytes("/api/sentry/image/$id/cabin"), 4)
+                    }.getOrNull()?.let { bitmap ->
+                        val balanced = runCatching { current.request("/api/cameras/white-balance", JSONObject()).optBoolean("enabled") }.getOrDefault(false)
+                        if (balanced) CabinWhiteBalance.apply(bitmap) else bitmap
+                    }
+                    wide to cabin
                 }
-                Thread(image).apply { isDaemon = true; start() }
-                try {
-                    val bitmap = image.get(5, java.util.concurrent.TimeUnit.SECONDS)
-                    if (bitmap != null && !suspended) manager.notify(notificationId, builder.setStyle(Notification.BigPictureStyle().bigPicture(bitmap)).build())
-                } catch (_: Exception) {} finally { image.cancel(true) }
+                Thread(images).apply { isDaemon = true; start() }
+                fun post(result: Pair<Bitmap?, Bitmap?>?) {
+                    result?.first?.let { builder.setStyle(Notification.BigPictureStyle().bigPicture(it)) }
+                    result?.second?.let { builder.setLargeIcon(it) }
+                    if (!suspended) manager.notify(notificationId, builder.build())
+                }
+                val unit = java.util.concurrent.TimeUnit.SECONDS
+                try { post(images.get(if (test) 20L else 5L, unit)); return@Thread } catch (_: Exception) { post(null) }
+                try { images.get(if (test) 15L else 3L, unit)?.takeIf { it.first != null || it.second != null }?.let(::post) }
+                catch (_: Exception) {} finally { images.cancel(true) }
             }.start()
         }
         return true
