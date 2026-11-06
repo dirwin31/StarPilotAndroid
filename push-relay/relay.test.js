@@ -9,7 +9,7 @@ function environment() {
 }
 test('strict schema and templated data-only payload', () => {
   assert.ok(valid(body))
-  for (const value of [{ ...body, appId: 'evil.app' }, { ...body, kind: 'arbitrary' }, { ...body, extra: true }, { ...body, token: 'a'.repeat(4097) }]) assert.equal(valid(value), false)
+  for (const value of [{ ...body, appId: 'evil.app' }, { ...body, appId: 'link.firestar.companion' }, { ...body, kind: 'arbitrary' }, { ...body, extra: true }, { ...body, token: 'a'.repeat(4097) }]) assert.equal(valid(value), false)
   const message = fcmMessage(body).message
   assert.equal(message.notification, undefined)
   assert.equal(message.android.priority, 'HIGH')
@@ -17,7 +17,8 @@ test('strict schema and templated data-only payload', () => {
 })
 test('rate limiting and response mapping', async () => {
   const env = environment()
-  for (let i = 0; i < 30; i++) assert.equal((await handle(request(), env, async () => Response.json({}), async () => 'oauth')).status, 200)
+  // Cloudflare's fetch rejects redirect: 'error'.
+  for (let i = 0; i < 30; i++) assert.equal((await handle(request(), env, async (url, init) => { assert.equal(init.redirect, 'manual'); return Response.json({}) }, async () => 'oauth')).status, 200)
   assert.equal((await handle(request(), env)).status, 429)
   for (const code of ['UNREGISTERED', 'INVALID_ARGUMENT']) {
     const failure = { error: { details: [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: code }] } }

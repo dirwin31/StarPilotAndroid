@@ -1,5 +1,5 @@
 import { sendAPNs } from './apns.js'
-const androidApps = new Set(['link.firestar.companion', 'com.starpilot.galaxy'])
+const androidApps = new Set(['com.starpilot.galaxy'])
 const defaultIosApps = 'link.galaxy.bluetooth.natehuby76'
 export const iosApps = env => new Set(String(env?.IOS_APP_IDS ?? defaultIosApps).split(',').map(id => id.trim()).filter(Boolean))
 const kinds = new Set(['warning', 'alarm', 'test'])
@@ -78,7 +78,7 @@ export async function handle(request, env, fetcher = fetch, authorize = accessTo
     const token = await authorize(env, fetcher)
     const response = await fetcher(`https://fcm.googleapis.com/v1/projects/${env.FCM_PROJECT_ID}/messages:send`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(fcmMessage(body, iosApps(env).has(body.appId))), signal: AbortSignal.timeout(5000), redirect: 'error',
+      body: JSON.stringify(fcmMessage(body, iosApps(env).has(body.appId))), signal: AbortSignal.timeout(5000), redirect: 'manual',
     })
     if (response.ok) return json(200, { ok: true })
     const failure = await response.json().catch(() => ({}))

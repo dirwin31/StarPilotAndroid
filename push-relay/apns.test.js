@@ -12,7 +12,7 @@ test('APNs sends a visible alert with bounded expiry, correct topic and environm
       assert.equal(request.headers['apns-topic'], body.appId)
       assert.equal(request.headers['apns-push-type'], 'alert')
       assert.equal(request.headers['apns-collapse-id'], body.eventId)
-      assert.equal(request.redirect, 'error')
+      assert.equal(request.redirect, 'manual')
       const payload = JSON.parse(request.body)
       assert.equal(payload.aps.alert.title, 'Sentry alarm')
       assert.equal(payload.type, 'sentry')

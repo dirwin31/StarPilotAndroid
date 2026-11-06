@@ -22,7 +22,7 @@ export async function sendAPNs(body, env, fetcher = fetch, authorize = apnsAutho
   const host = token[1] === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com'
   const title = { alarm: 'Sentry alarm', warning: 'Sentry: motion detected', test: 'Galaxy test alert' }[body.kind]
   const response = await fetcher(`https://${host}/3/device/${token[2]}`, {
-    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000),
+    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(5000),
     headers: { authorization: `bearer ${await authorize(env)}`, 'content-type': 'application/json',
       'apns-topic': body.appId, 'apns-push-type': 'alert', 'apns-priority': '10',
       'apns-expiration': String(Math.floor(Date.now() / 1000) + 600), 'apns-collapse-id': body.eventId },
