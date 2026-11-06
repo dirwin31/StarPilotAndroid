@@ -5,6 +5,7 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import org.json.JSONArray
@@ -107,6 +108,8 @@ object SentryPush {
             else -> if (result.optBoolean("appPushAvailable")) "Registered; send a test from Galaxy → Sentry" else "Polling; relay not configured"
         }
     }
+    private fun decode(bytes: ByteArray, sample: Int): Bitmap? =
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
     @Synchronized fun receive(ctx: Context, data: Map<String, String>, fromPush: Boolean = true, demo: Boolean = false): Boolean {
         val p = prefs(ctx)
         if (!demo && suspended) return false
@@ -129,16 +132,28 @@ object SentryPush {
             p.edit().putString("sentrySeenIds", JSONArray(dedupe.ids()).toString())
                 .putLong("sentryLastSeenNs", maxOf(p.getLong("sentryLastSeenNs", 0), (data["wallTimeNs"]?.toLongOrNull() ?: 0).coerceIn(0, System.currentTimeMillis() * 1000000)))
                 .apply { if (fromPush) putLong("sentryLastPushAt", System.currentTimeMillis()) }.commit()
+            val test = data["kind"] == "test"
             Thread {
-                val image = java.util.concurrent.FutureTask {
-                    val current = api ?: SentryApi.best(ctx)
-                    current?.bytes("/api/sentry/image/$id/wide")?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                val images = java.util.concurrent.FutureTask {
+                    val current = api ?: SentryApi.best(ctx) ?: return@FutureTask null
+                    val wide = if (test) null else runCatching { decode(current.bytes("/api/sentry/image/$id/wide"), 1) }.getOrNull()
+                    val cabin = runCatching {
+                        decode(if (test) current.bytes("/api/cameras/snapshot", JSONObject().put("camera", "cabin"), 30000)
+                               else current.bytes("/api/sentry/image/$id/cabin"), 4)
+                    }.getOrNull()?.let { bitmap ->
+                        val balanced = runCatching { current.request("/api/cameras/white-balance", JSONObject()).optBoolean("enabled") }.getOrDefault(false)
+                        if (balanced) CabinWhiteBalance.apply(bitmap) else bitmap
+                    }
+                    wide to cabin
                 }
-                Thread(image).apply { isDaemon = true; start() }
+                Thread(images).apply { isDaemon = true; start() }
                 try {
-                    val bitmap = image.get(5, java.util.concurrent.TimeUnit.SECONDS)
-                    if (bitmap != null && !suspended) manager.notify(notificationId, builder.setStyle(Notification.BigPictureStyle().bigPicture(bitmap)).build())
-                } catch (_: Exception) {} finally { image.cancel(true) }
+                    val (wide, cabin) = images.get(if (test) 35L else 8L, java.util.concurrent.TimeUnit.SECONDS) ?: return@Thread
+                    if (suspended || (wide == null && cabin == null)) return@Thread
+                    cabin?.let { builder.setLargeIcon(it) }
+                    wide?.let { builder.setStyle(Notification.BigPictureStyle().bigPicture(it)) }
+                    manager.notify(notificationId, builder.build())
+                } catch (_: Exception) {} finally { images.cancel(true) }
             }.start()
         }
         return true
