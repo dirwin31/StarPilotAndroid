@@ -5,18 +5,18 @@ The app works without Firebase or a relay: enabled alerts use polling while conn
 ## Launch checklist
 
 1. **Firebase (done):** project `starpilot-sentry` on the Spark plan, Android app `com.starpilot.galaxy`, Cloud Messaging API (V1) enabled, and service account `galaxy-push-relay` with **Firebase Cloud Messaging API Admin**.
-2. **Apple:** Nate enables Push Notifications for `link.galaxy.bluetooth.natehuby76`, creates an APNs `.p8` key, and sends the key, Key ID and Team ID privately to the host.
-3. **Host:** follows [HOSTING.md](HOSTING.md) and sends back the relay URL.
-4. **StarPilot:** set `DEFAULT_RELAY_URL` in `openpilot/starpilot/sentry_mode/relay_config.py` to that URL (origin only, no path) and ship the release.
+2. **iPhone in Firebase:** in the Firebase console, add an Apple app with bundle ID `link.galaxy.bluetooth.natehuby76` (skip the SDK and plist steps). Then, under Project settings → Cloud Messaging → Apple app configuration, upload Nate's APNs auth key (`.p8`, Key ID and Team ID). To keep the key with Nate, add him to the Firebase project and let him upload it. The iOS app itself needs no Firebase SDK.
+3. **Relay:** deploy and check it with [HOSTING.md](HOSTING.md).
+4. **StarPilot:** set `DEFAULT_RELAY_URL` in `openpilot/starpilot/sentry_mode/relay_config.py` to the relay URL (origin only, no path) and ship the release.
 5. **Android release:** store the client config once with `gh secret set GOOGLE_SERVICES_JSON --repo dirwin31/StarPilotAndroid --env android-release < app/google-services.json`. The release workflow writes it before building the Play bundle and fails if it is missing. Keep the file out of git: the Direct flavor's ID isn't in it, so committing it breaks the Direct unit tests.
-6. **iOS release:** build the iOS PR. Debug uses sandbox APNs; Release (TestFlight and App Store) uses production.
+6. **iOS release:** Nate enables Push Notifications for the bundle ID and builds the iOS PR. Debug uses sandbox APNs; Release (TestFlight and App Store) uses production.
 7. **Test:** see [Test](#test).
 
 Users then tap **Enable alerts** in Galaxy → Sentry or in the app. The phone asks for notification permission, and comma enrolls itself and registers the phone. There are no codes or URLs to type.
 
 ## How it fits together
 
-Each comma generates its own sending credential on enrollment and keeps it private. Phones keep their own push tokens. The Worker stores only credential digests, phone-token fingerprints and short-lived delivery receipts. Camera media stays on comma. Android gets a data-only Firebase message; iPhone gets a visible Apple alert without photos. Tapping either opens Sentry events.
+Each comma generates its own sending credential on enrollment and keeps it private. Phones keep their own push tokens. The Worker stores only credential digests, phone-token fingerprints and short-lived delivery receipts. Camera media stays on comma. Android gets a data-only Firebase message. The iPhone app registers its Apple token; the Worker converts it to a Firebase token and Firebase delivers a visible alert without photos through Apple. Tapping either opens Sentry events.
 
 If the relay rejects a phone (for example, an app ID it doesn't know), comma skips that phone and keeps alerting the others. The phone retries when it next reconnects.
 
@@ -42,7 +42,7 @@ Rotate the key by replacing the file, running `systemctl restart galaxy-push-rel
 ## Test
 
 - **Relay alone:** `node operator.mjs check` (see HOSTING.md step 6). To push to a real Android phone, copy its token from Connections → Notification details and run `read -r -s RELAY_TEST_TOKEN && export RELAY_TEST_TOKEN` before the check.
-- **End to end:** on a release with `DEFAULT_RELAY_URL` set, enable alerts on each phone, then use **Send test** in Galaxy → Sentry. Repeat with the app in the background and the phone off comma's Wi-Fi while comma has internet. A 200 from the relay means Firebase or Apple accepted the message, not that the phone showed it.
+- **End to end:** on a release with `DEFAULT_RELAY_URL` set, enable alerts on each phone, then use **Send test** in Galaxy → Sentry. Repeat with the app in the background and the phone off comma's Wi-Fi while comma has internet. A 200 from the relay means Firebase accepted the message, not that the phone showed it.
 - **Without the relay:** use Simulate event while parked and check polling.
 
 Do not force-stop the Android app to test background delivery. Android blocks a force-stopped app until it is opened again.

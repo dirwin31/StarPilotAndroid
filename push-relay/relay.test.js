@@ -47,3 +47,25 @@ test('iOS IDs are configurable and can be disabled', () => {
   assert.equal(iosApps({ IOS_APP_IDS: '' }).size, 0)
   assert.deepEqual([...iosApps({ IOS_APP_IDS: 'a.b, c.d' })], ['a.b', 'c.d'])
 })
+test('Apple tokens are converted through Firebase and sent as visible alerts', async () => {
+  const env = { ...environment(), IOS_APP_IDS: 'link.galaxy.bluetooth.natehuby76' }
+  const phone = { ...body, appId: 'link.galaxy.bluetooth.natehuby76', token: `apns.sandbox.${'cd'.repeat(32)}` }
+  const calls = []
+  const fetcher = async (url, init) => {
+    calls.push(url)
+    assert.equal(init.redirect, 'manual')
+    const sent = JSON.parse(init.body)
+    if (url.startsWith('https://iid.googleapis.com/')) {
+      assert.deepEqual(sent, { application: phone.appId, sandbox: true, apns_tokens: ['cd'.repeat(32)] })
+      return Response.json({ results: [{ status: 'OK', registration_token: 'fcm-from-apns' }] })
+    }
+    assert.equal(sent.message.token, 'fcm-from-apns')
+    assert.equal(sent.message.notification.title, 'Sentry motion')
+    return Response.json({})
+  }
+  for (let i = 0; i < 2; i++) assert.equal((await handle(request(phone), env, fetcher, async () => 'oauth')).status, 200)
+  assert.equal(calls.filter(url => url.startsWith('https://iid.googleapis.com/')).length, 1)
+  const failed = async url => url.startsWith('https://iid.') ? Response.json({ results: [{ status: 'INTERNAL' }] }) : assert.fail('must not send')
+  assert.equal((await handle(request({ ...phone, token: `apns.production.${'ef'.repeat(32)}` }), env, failed, async () => 'oauth')).status, 502)
+  assert.equal((await handle(request({ ...phone, token: 'apns.production.xyz' }), env, () => assert.fail('must not send'), async () => 'oauth')).status, 400)
+})
