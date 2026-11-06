@@ -2,15 +2,18 @@
 
 The app works without Firebase or a relay: enabled alerts use polling while connected and a 15-minute Android job. Android schedules background work opportunistically, so this does not promise immediate delivery.
 
-## Launch checklist
+## Status
 
-1. **Firebase (done):** project `starpilot-sentry` on the Spark plan, Android app `com.starpilot.galaxy`, Cloud Messaging API (V1) enabled, and service account `galaxy-push-relay` with **Firebase Cloud Messaging API Admin**.
-2. **iPhone in Firebase:** in the Firebase console, add an Apple app with bundle ID `link.galaxy.bluetooth.natehuby76` (skip the SDK and plist steps). Then, under Project settings → Cloud Messaging → Apple app configuration, upload Nate's APNs auth key (`.p8`, Key ID and Team ID). To keep the key with Nate, add him to the Firebase project and let him upload it. The iOS app itself needs no Firebase SDK.
-3. **Relay:** deploy and check it with [HOSTING.md](HOSTING.md).
-4. **StarPilot:** set `DEFAULT_RELAY_URL` in `openpilot/starpilot/sentry_mode/relay_config.py` to the relay URL (origin only, no path) and ship the release.
-5. **Android release:** store the client config once with `gh secret set GOOGLE_SERVICES_JSON --repo dirwin31/StarPilotAndroid --env android-release < app/google-services.json`. The release workflow writes it before building the Play bundle and fails if it is missing. Keep the file out of git: the Direct flavor's ID isn't in it, so committing it breaks the Direct unit tests.
-6. **iOS release:** Nate enables Push Notifications for the bundle ID and builds the iOS PR. Debug uses sandbox APNs; Release (TestFlight and App Store) uses production.
-7. **Test:** see [Test](#test).
+Done:
+- Firebase project `starpilot-sentry`: Android app `com.starpilot.galaxy`, Cloud Messaging API (V1) and the `galaxy-push-relay` service account.
+- Relay deployed at `https://galaxy-sentry-relay.dannyirwin31.workers.dev` with its live check passing ([HOSTING.md](HOSTING.md)).
+- `DEFAULT_RELAY_URL` set in StarPilot.
+- `GOOGLE_SERVICES_JSON` stored for Play releases. The release workflow writes it before building the Play bundle. Keep the file out of git: the Direct flavor's ID isn't in it, so committing it breaks the Direct unit tests.
+
+Remaining:
+1. **iPhone in Firebase:** in the Firebase console, add an Apple app with bundle ID `link.galaxy.bluetooth.natehuby76` (skip the SDK and plist steps). Then, under Project settings → Cloud Messaging → Apple app configuration, upload Nate's APNs auth key (`.p8`, Key ID and Team ID). Adding Nate to the Firebase project lets him upload it himself.
+2. **iOS release:** Nate enables Push Notifications for the bundle ID and builds the iOS PR. Debug uses sandbox APNs; Release (TestFlight and App Store) uses production.
+3. **Test** on real phones: see [Test](#test).
 
 Users then tap **Enable alerts** in Galaxy → Sentry or in the app. The phone asks for notification permission, and comma enrolls itself and registers the phone. There are no codes or URLs to type.
 
@@ -42,7 +45,7 @@ Rotate the key by replacing the file, running `systemctl restart galaxy-push-rel
 ## Test
 
 - **Relay alone:** `node operator.mjs check` (see HOSTING.md step 6). To push to a real Android phone, copy its token from Connections → Notification details and run `read -r -s RELAY_TEST_TOKEN && export RELAY_TEST_TOKEN` before the check.
-- **End to end:** on a release with `DEFAULT_RELAY_URL` set, enable alerts on each phone, then use **Send test** in Galaxy → Sentry. Repeat with the app in the background and the phone off comma's Wi-Fi while comma has internet. A 200 from the relay means Firebase accepted the message, not that the phone showed it.
+- **End to end:** on a comma running the StarPilot PR, enable alerts on each phone, then use **Send test** in Galaxy → Sentry. Repeat with the app in the background and the phone off comma's Wi-Fi while comma has internet. A 200 from the relay means Firebase accepted the message, not that the phone showed it.
 - **Without the relay:** use Simulate event while parked and check polling.
 
 Do not force-stop the Android app to test background delivery. Android blocks a force-stopped app until it is opened again.

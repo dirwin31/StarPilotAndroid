@@ -4,6 +4,8 @@ This Worker forwards parked Sentry alerts from comma devices to phones through F
 
 ## Set up (one time)
 
+Already done: the relay runs at `https://galaxy-sentry-relay.dannyirwin31.workers.dev` on Danny's Cloudflare account, and the admin secret is in his Keychain as `galaxy-relay-admin`. These steps are for rebuilding it.
+
 1. **Install Node.js 20 or newer.** Check with `node --version`.
 2. **Run the tests** from `push-relay`: `npm test`. Nothing is sent anywhere.
 3. **Sign in to Cloudflare:** `npx wrangler@4 login`. Workers Paid ($5/month) is recommended at this size; Free works but has daily request and storage-write caps.
