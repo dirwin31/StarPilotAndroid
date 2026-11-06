@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "393299653724",
+    "project_id": "starpilot-sentry",
+    "storage_bucket": "starpilot-sentry.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:393299653724:android:00958131383110f7bba299",
+        "android_client_info": {
+          "package_name": "com.starpilot.galaxy"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyByRkwMwX-L6DOcrXBWyXYnP81YiRlb6d0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

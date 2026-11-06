@@ -100,6 +100,7 @@ jobs:
           test -n "$COMPANION_UPLOAD_KEY_PASSWORD"
           test -n "$AA_COMPANION_CERT_SHA256"
           ./build_play.sh
+          unzip -p app/build/outputs/bundle/playRelease/app-play-release.aab base/resources.pb | grep -q google_app_id || { echo 'Play bundle was built without Firebase' >&2; exit 1; }
       - name: Remove keys
         if: always()
         run: rm -f "$RUNNER_TEMP/companion.jks" "$RUNNER_TEMP/upload.jks"
