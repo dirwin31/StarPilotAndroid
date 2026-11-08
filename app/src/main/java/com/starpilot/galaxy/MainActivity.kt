@@ -757,7 +757,6 @@ class MainActivity : Activity() {
                 preferredWifiChanged(); updateDone()
             }
         })
-        content.addView(requiredNetwork)
         val add = TextView(this).apply {
             text = "Add current Wi-Fi"; textSize = 16f; typeface = Palette.medium
             setTextColor(Palette.VIOLET_SOFT)
@@ -777,6 +776,7 @@ class MainActivity : Activity() {
         val saved = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply { addView(saved) }
         content.addView(scroll, LinearLayout.LayoutParams(-1, dp(200)))
+        content.addView(requiredNetwork, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
         fun refreshSaved() {
             updateDone()
             val names = prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty().sorted()
