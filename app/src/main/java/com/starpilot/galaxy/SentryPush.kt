@@ -21,8 +21,27 @@ object SentryPush {
         val id = p.getString("fcmToken", "").orEmpty().takeIf { it.isNotEmpty() }?.let {
             java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { byte -> "%02x".format(byte) }.take(12)
         }.orEmpty()
-        return JSONObject().put("id", id).put("available", FirebaseRegistration.available).put("enabled", p.getBoolean("sentryPushEnabled", false))
-            .put("registered", p.getString("fcmRegisteredOrigin", "").orEmpty().isNotEmpty()).toString()
+        val enabled = p.getBoolean("sentryPushEnabled", false)
+        val registered = p.getString("fcmRegisteredOrigin", "").orEmpty().isNotEmpty()
+        val status = when {
+            !enabled -> if (p.getString("sentryPendingUnsubscribe", "").orEmpty().isNotEmpty()) "Alerts off. Reconnect to comma to remove this phone." else "Alerts off"
+            !permitted(ctx) -> "Allow notifications in Android Settings to receive Sentry alerts."
+            registered -> p.getString("fcmAcknowledgement", "").orEmpty().ifEmpty { "Registered" }
+            p.getString("fcmAcknowledgement", "") == "Registration failed" -> "Couldn't register this phone. Reconnect to comma."
+            else -> "Registering this phone…"
+        }
+        return JSONObject().put("id", id).put("available", FirebaseRegistration.available).put("enabled", enabled)
+            .put("registered", registered).put("status", status).toString()
+    }
+    private fun flushUnsubscribe(ctx: Context, current: SentryApi) {
+        val p = prefs(ctx)
+        val old = p.getString("sentryPendingUnsubscribe", "").orEmpty()
+        if (old.isEmpty()) return
+        if (p.getBoolean("sentryPushEnabled", false) && old == p.getString("fcmToken", "")) { p.edit().remove("sentryPendingUnsubscribe").apply(); return }
+        Thread { runCatching {
+            current.request("/api/sentry/notifications", JSONObject().put("action", "appUnsubscribe").put("token", old))
+            if (p.getString("sentryPendingUnsubscribe", "") == old) p.edit().remove("sentryPendingUnsubscribe").apply()
+        } }.start()
     }
     fun enable(ctx: Context, on: Boolean): Boolean {
         if (on && !permitted(ctx)) return false
@@ -34,9 +53,8 @@ object SentryPush {
             FirebaseRegistration.stop(ctx)
             SentryPollJob.cancel(ctx)
             val token = p.getString("fcmToken", "").orEmpty()
-            val current = api
-            p.edit().remove("fcmRegisteredOrigin").apply()
-            Thread { runCatching { current?.request("/api/sentry/notifications", JSONObject().put("action", "appUnsubscribe").put("token", token)) } }.start()
+            p.edit().remove("fcmRegisteredOrigin").apply { if (token.isNotEmpty()) putString("sentryPendingUnsubscribe", token) }.apply()
+            api?.let { flushUnsubscribe(ctx, it) }
         }
         return true
     }
@@ -47,6 +65,7 @@ object SentryPush {
     fun registerIfNeeded(ctx: Context, current: SentryApi) {
         if (suspended) return
         api = current
+        flushUnsubscribe(ctx, current)
         val p = prefs(ctx)
         if (!p.getBoolean("sentryPushEnabled", false)) return
         val token = p.getString("fcmToken", "").orEmpty()
