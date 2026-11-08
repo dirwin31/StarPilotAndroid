@@ -64,7 +64,7 @@ jobs:
       - name: Test
         run: |
           ./gradlew --max-workers=1 testDirectDebugUnitTest testPlayDebugUnitTest
-          node --test push-relay/relay.test.js push-relay/server.test.js
+          node --test push-relay/*.test.js
       - name: Restore Direct signing key
         if: steps.release.outputs.channel == 'direct'
         env:
@@ -96,9 +96,13 @@ jobs:
           COMPANION_UPLOAD_KEYSTORE: ${{ runner.temp }}/upload.jks
           COMPANION_UPLOAD_KEY_PASSWORD: ${{ secrets.COMPANION_UPLOAD_KEY_PASSWORD }}
           AA_COMPANION_CERT_SHA256: ${{ secrets.AA_COMPANION_CERT_SHA256 }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          ORG_GRADLE_PROJECT_requireSentryPush: 'true'
         run: |
           test -n "$COMPANION_UPLOAD_KEY_PASSWORD"
           test -n "$AA_COMPANION_CERT_SHA256"
+          test -n "$GOOGLE_SERVICES_JSON"
+          printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
           ./build_play.sh
           unzip -p app/build/outputs/bundle/playRelease/app-play-release.aab base/resources.pb | grep -q google_app_id || { echo 'Play bundle was built without Firebase' >&2; exit 1; }
       - name: Remove keys
