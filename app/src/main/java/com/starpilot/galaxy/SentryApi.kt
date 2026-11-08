@@ -10,12 +10,12 @@ class SentryApi(val origin: String, private val cookie: String, private val netw
                 private val bridge: ((String, JSONObject?) -> JSONObject)? = null,
                 private val cookieProvider: (() -> String)? = null) {
     fun request(path: String, body: JSONObject? = null): JSONObject = bridge?.invoke(path, body) ?: JSONObject(String(bytes(path, body)))
-    fun bytes(path: String, body: JSONObject? = null): ByteArray {
+    fun bytes(path: String, body: JSONObject? = null, readTimeoutMs: Int = 3000): ByteArray {
         check(!Thread.currentThread().isInterrupted)
         require(path.startsWith("/api/") && !path.contains(".."))
         val connection = (network?.openConnection(URL(origin + path)) ?: URL(origin + path).openConnection()) as HttpURLConnection
         try {
-            connection.connectTimeout = 2000; connection.readTimeout = 3000; connection.instanceFollowRedirects = false
+            connection.connectTimeout = 2000; connection.readTimeout = readTimeoutMs; connection.instanceFollowRedirects = false
             connection.setRequestProperty("Cookie", cookieProvider?.invoke() ?: cookie)
             if (body != null) {
                 connection.requestMethod = "POST"; connection.doOutput = true
