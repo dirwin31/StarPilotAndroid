@@ -22,10 +22,22 @@ object SentryPush {
         val id = p.getString("fcmToken", "").orEmpty().takeIf { it.isNotEmpty() }?.let {
             java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { byte -> "%02x".format(byte) }.take(12)
         }.orEmpty()
-        return JSONObject().put("id", id).put("available", FirebaseRegistration.available).put("enabled", p.getBoolean("sentryPushEnabled", false))
-            .put("registered", p.getString("fcmRegisteredOrigin", "").orEmpty().isNotEmpty())
-            .put("status", p.getString("fcmAcknowledgement", "Enable phone alerts, then enroll the relay in Galaxy → Sentry.")).toString()
+        val enabled = p.getBoolean("sentryPushEnabled", false)
+        val registered = enabled && p.getString("fcmRegisteredOrigin", "").orEmpty().isNotEmpty()
+        val acknowledgement = p.getString("fcmAcknowledgement", "").orEmpty()
+        val pendingRemoval = p.all.any { (key, value) -> key.startsWith("fcmSubscription:") && value is String && value.isNotEmpty() }
+        val status = when {
+            !enabled -> if (pendingRemoval) "Alerts off. Reconnect to comma to remove this phone." else "Alerts off"
+            !permitted(ctx) -> "Allow notifications in Android Settings to receive Sentry alerts."
+            !FirebaseRegistration.available -> "Polling only: Firebase is not configured in this build"
+            acknowledgement.startsWith("Registration failed") -> "Couldn't register this phone. Reconnect to comma."
+            registered -> acknowledgement.ifEmpty { "Registered" }
+            else -> "Registering this phone…"
+        }
+        return JSONObject().put("id", id).put("available", FirebaseRegistration.available).put("enabled", enabled)
+            .put("registered", registered).put("status", status).toString()
     }
+
     fun enable(ctx: Context, on: Boolean): Boolean {
         if (on && !permitted(ctx)) return false
         val p = prefs(ctx)
@@ -37,9 +49,14 @@ object SentryPush {
             FirebaseRegistration.stop(ctx)
             SentryPollJob.cancel(ctx)
             val token = p.getString("fcmToken", "").orEmpty()
-            val current = api
-            p.edit().remove("fcmRegisteredOrigin").apply()
-            Thread { runCatching { current?.request("/api/sentry/notifications", JSONObject().put("action", "appUnsubscribe").put("token", token)) } }.start()
+            val registeredOrigin = p.getString("fcmRegisteredOrigin", "").orEmpty()
+            p.edit().apply {
+                // Preserve older registrations that predate per-origin subscription tracking.
+                if (registeredOrigin.isNotEmpty() && token.isNotEmpty() && !p.contains("fcmSubscription:$registeredOrigin"))
+                    putString("fcmSubscription:$registeredOrigin", token)
+                remove("fcmRegisteredOrigin")
+            }.apply()
+            api?.let { registerIfNeeded(ctx, it) }
         }
         return true
     }

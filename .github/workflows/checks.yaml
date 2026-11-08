@@ -1,9 +1,9 @@
 name: Android checks
 on:
   pull_request:
-    branches: [Play-Dev, Direct-Dev, Play-Distro, Direct-Distro]
+    branches: [Play-Dev, Play-Distro]
   push:
-    branches: [Play-Dev, Direct-Dev, Play-Distro, Direct-Distro]
+    branches: [Play-Dev, Play-Distro]
 permissions:
   contents: read
 jobs:
@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [Direct, Play]
+        flavor: [Play]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
