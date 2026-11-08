@@ -755,6 +755,9 @@ class MainActivity : Activity() {
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(PreferredWifi.ENABLED, checked).apply()
                 preferredWifiChanged(); updateDone()
+                if (checked && !hasPermission) {
+                    dialog?.dismiss(); requestWifiNamePermission()
+                }
             }
         })
         val add = TextView(this).apply {
@@ -770,7 +773,7 @@ class MainActivity : Activity() {
                 }, null)
         }
         content.addView(add, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
-        val currentLabel = label(current?.let { "Connected: $it" } ?: if (hasWifi) "Allow Wi-Fi name access to add this network." else "Connect to Wi-Fi to add a network.")
+        val currentLabel = label(current?.let { "Connected: $it" } ?: if (hasWifi && !hasPermission) "Turn on preferred Wi-Fi to allow Wi-Fi name access." else if (hasWifi) "Wi-Fi name unavailable" else "Connect to Wi-Fi to add a network.")
         content.addView(currentLabel)
         content.addView(label("Saved networks").apply { setTextColor(Palette.VIOLET_SOFT); typeface = Palette.medium })
         val saved = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -780,7 +783,7 @@ class MainActivity : Activity() {
         fun refreshSaved() {
             updateDone()
             val names = prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty().sorted()
-            add.isEnabled = hasWifi && (current == null || current !in names)
+            add.isEnabled = hasWifi && hasPermission && (current == null || current !in names)
             val alreadySaved = current != null && current in names
             add.visibility = if (alreadySaved) android.view.View.GONE else android.view.View.VISIBLE
             currentLabel.visibility = if (alreadySaved) android.view.View.GONE else android.view.View.VISIBLE
@@ -812,8 +815,7 @@ class MainActivity : Activity() {
         dialog = AlertDialog.Builder(this).setTitle("Preferred Wi-Fi")
             .setView(content).setPositiveButton("Done", null).create()
         add.setOnClickListener {
-            if (!hasPermission) { dialog?.dismiss(); requestWifiNamePermission() }
-            else if (current == null) {
+            if (current == null) {
                 AlertDialog.Builder(this).setTitle("Wi-Fi name unavailable")
                     .setMessage("Enable Location in Android settings so Galaxy can read your Wi-Fi name.")
                     .setPositiveButton("Location settings") { _, _ ->
@@ -1656,10 +1658,6 @@ class MainActivity : Activity() {
             return
         }
         if (code == 25) {
-            PreferredWifi.currentName(this)?.let { name ->
-                prefs.edit().putStringSet(PreferredWifi.NETWORKS,
-                    prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty() + name).apply()
-            }
             preferredWifiChanged(); preferredWifiSettings(); return
         }
         if (code == 1 && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) Distribution.checkAsync(this)
