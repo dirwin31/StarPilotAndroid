@@ -731,14 +731,21 @@ class MainActivity : Activity() {
             text = value; textSize = 14f; setTextColor(Palette.MUTED); setPadding(0, dp(8), 0, dp(8))
         }
         var dialog: AlertDialog? = null
-        val requiredNetwork = label("Add a network or turn off preferred Wi-Fi to continue.").apply {
-            setTextColor(Palette.VIOLET_SOFT)
+        val requiredNetwork = label("Add a network to continue, or turn off preferred Wi-Fi.").apply {
+            setTextColor(Palette.ERROR)
+            typeface = Palette.medium
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(Palette.alpha(Palette.ERROR, 24))
+                setStroke(dp(1), Palette.alpha(Palette.ERROR, 100))
+            }
         }
         fun updateDone() {
             val needsNetwork = prefs.getBoolean(PreferredWifi.ENABLED, false) &&
                 prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty().isEmpty()
             dialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = !needsNetwork
-            requiredNetwork.visibility = if (needsNetwork) android.view.View.VISIBLE else android.view.View.GONE
+            requiredNetwork.visibility = if (needsNetwork) android.view.View.VISIBLE else android.view.View.INVISIBLE
         }
         content.addView(label("Automatically search for StarPilot only on these Wi-Fi networks. Elsewhere, use Remote or Bluetooth."))
         content.addView(Switch(this).apply {
