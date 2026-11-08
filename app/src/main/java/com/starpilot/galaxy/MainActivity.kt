@@ -55,17 +55,20 @@ class MainActivity : Activity() {
     private var pageWatchdog: Runnable? = null
     private var resumed = false
     private val knownWifi = mutableSetOf<Network>()
+    private var automaticLanNetwork: Network? = null
     private val wifiWatcher = object : ConnectivityManager.NetworkCallback() {
         override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
             if (network in knownWifi || properties.linkAddresses.none { it.address is Inet4Address && it.address.isSiteLocalAddress }) return
             knownWifi.add(network)
             // Open Galaxy as soon as the phone joins a Wi-Fi network, without waiting for "Try again".
             handler.post {
-                val mayPreemptBluetooth = bluetoothAttemptAutomatic && screen?.state(Route.BLUETOOTH) == RouteState.TRYING
-                if (idle() || mayPreemptBluetooth) connect() else scheduleUpgrade()
+                val mayPreemptBluetooth = automaticWifiAllowed() && bluetoothAttemptAutomatic && screen?.state(Route.BLUETOOTH) == RouteState.TRYING
+                if (idle() || mayPreemptBluetooth || automaticLanNetwork != null) connect() else scheduleUpgrade()
             }
         }
         override fun onLost(network: Network) { knownWifi.remove(network); handler.post {
+            if (automaticLanNetwork == network) { connect(); return@post }
+            upgradeDiscovery?.close(); upgradeDiscovery = null
             if (activeRoute in setOf(Route.GALAXY_WIFI, Route.HOME_NETWORK) && Networks.wifi(this@MainActivity, false) == null) {
                 if (!fallbackFrom(activeRoute)) disconnected()
             } else if (activeRoute in setOf(Route.GALAXY_WIFI, Route.HOME_NETWORK)) checkRouteHealth(force = true)
@@ -214,6 +217,7 @@ class MainActivity : Activity() {
         web?.url?.substringAfter('#', "")?.takeIf { it.startsWith("/") && it.length <= 4096 }?.let { routeHash = it }
         prefs.edit().putString("lastRouteHash", routeHash).apply()
         activeRoute = null
+        automaticLanNetwork = null
         SentryPush.api = null
         stopDiscovery()
         val generation = connectionGeneration.incrementAndGet()
@@ -236,6 +240,10 @@ class MainActivity : Activity() {
         val mode = prefs.getString("transport", "auto")
         if (host == null && mode == "remote") { connectTunnel(promptForKey = true); return }
         if (host == null && mode == "bluetooth") { connectBluetooth(automatic = true); return }
+        if (host == null && mode == "auto" && !automaticWifiAllowed()) {
+            if (!fallbackFrom(null)) disconnected()
+            return
+        }
         if (host == null && mode == "auto" && !skipOrder && routeOrder().first() != "wifi" && fallbackFrom(null)) return
         val hotspot = Networks.wifi(this)
         val wifi = hotspot ?: Networks.wifi(this, false)
@@ -314,6 +322,7 @@ class MainActivity : Activity() {
         if (prefs.getBoolean("enabled", false)) startForegroundService(Intent(this, UplinkService::class.java))
     }
     private fun probeWifi(network: Network, candidate: String, generation: Int, automatic: Boolean = true) {
+        if (automatic && prefs.getString("transport", "auto") == "auto") automaticLanNetwork = network
         val route = if (candidate == Networks.ORIGIN) Route.GALAXY_WIFI else Route.HOME_NETWORK
         connectScreen().apply {
             refreshRoutes(this)
@@ -334,6 +343,9 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed || generation != connectionGeneration.get()) return@runOnUiThread
                 routeDetails[route] = if (reachable) "Reachable" else "Galaxy did not answer"
+                if (automatic && prefs.getString("transport", "auto") == "auto" && (Networks.wifi(this, false)?.first != network || !automaticWifiAllowed())) {
+                    connect(); return@runOnUiThread
+                }
                 if (reachable) connect(candidate)
                 else if (route == Route.HOME_NETWORK) discoverLan(automatic = automatic)
                 else if (!automatic || !fallbackFrom(Route.HOME_NETWORK)) disconnected().apply {
@@ -430,6 +442,8 @@ class MainActivity : Activity() {
         s.route(Route.HOME_NETWORK, if (lan) RouteState.IDLE else RouteState.UNAVAILABLE, when {
             hotspot -> "Not needed on Galaxy Wi-Fi"
             !lan -> "Not on Wi-Fi"
+            prefs.getString("transport", "auto") == "auto" && !automaticWifiAllowed() ->
+                if (PreferredWifi.currentName(this) == null) "LAN skipped — Wi-Fi name unavailable" else "LAN skipped — not on preferred Wi-Fi"
             saved != null -> "Last found at ${address(saved)}"
             else -> "Tap to search"
         })
@@ -569,6 +583,10 @@ class MainActivity : Activity() {
         ConnectionSheet(this, Transport.of(prefs.getString("transport", "auto")), routeOrder().map { Transport.of(it) })
             .onOrder { order -> prefs.edit().putString("routeOrder", order.joinToString(",") { it.key }).apply() }
             .onTransport { prefs.edit().putString("transport", it.key).apply(); connect() }
+            .group("Automatic LAN search") {
+                action("Only search LAN on preferred Wi-Fi", if (prefs.getBoolean(PreferredWifi.ENABLED, false)) "On" else "Off · search any Wi-Fi") { preferredWifiSettings() }
+                action("Preferred Wi-Fi networks", "${prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty().size} saved · add or remove networks") { preferredWifiSettings() }
+            }
             .group("Remote access") {
                 if (tunnel.load() != null) {
                     action("Forget remote key", danger = true) {
@@ -701,10 +719,73 @@ class MainActivity : Activity() {
         discovery?.close(); discovery = null
         lanPicker?.dismiss(); lanPicker = null
     }
+    private fun preferredWifiSettings() {
+        val enabled = prefs.getBoolean(PreferredWifi.ENABLED, false)
+        val names = prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty().sorted()
+        val current = PreferredWifi.currentName(this)
+        val hasPermission = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val options = mutableListOf(if (enabled) "Turn restriction off" else "Only search LAN on preferred Wi-Fi")
+        options.add(if (!hasPermission) "Allow Wi-Fi name access" else "Add current Wi-Fi")
+        options.addAll(names.map { "Remove $it" })
+        val status = when {
+            Networks.wifi(this, false) == null -> "Not on Wi-Fi. Automatic goes straight to Remote or Bluetooth."
+            current == null -> "Wi-Fi name unavailable. Allow precise location and enable Location in Android settings to read Wi-Fi names."
+            else -> "Current Wi-Fi: $current"
+        }
+        AlertDialog.Builder(this).setTitle("Preferred Wi-Fi")
+            .setItems(options.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> {
+                        prefs.edit().putBoolean(PreferredWifi.ENABLED, !enabled).apply()
+                        preferredWifiChanged()
+                        if (!enabled && !hasPermission) requestWifiNamePermission() else preferredWifiSettings()
+                    }
+                    1 -> {
+                        if (!hasPermission) requestWifiNamePermission()
+                        else if (current == null) AlertDialog.Builder(this).setTitle("Wi-Fi name unavailable")
+                            .setMessage(status).setPositiveButton("Location settings") { _, _ -> startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+                            .setNegativeButton("Done", null).show()
+                        else {
+                            prefs.edit().putStringSet(PreferredWifi.NETWORKS, names.toSet() + current).apply()
+                            preferredWifiChanged(); preferredWifiSettings()
+                        }
+                    }
+                    else -> {
+                        prefs.edit().putStringSet(PreferredWifi.NETWORKS, names.toSet() - names[which - 2]).apply()
+                        preferredWifiChanged(); preferredWifiSettings()
+                    }
+                }
+            }
+            .setCustomTitle(TextView(this).apply {
+                text = "Preferred Wi-Fi · ${if (enabled) "On" else "Off"}\n\n$status\n\n" +
+                    "Automatic only. Galaxy hotspot and manual LAN searches remain available. " +
+                    "With the restriction on, unknown Wi-Fi names are skipped. ${names.size} networks saved."
+                setPadding(40, 32, 40, 16); textSize = 16f
+            })
+            .setNegativeButton("Done", null).show()
+    }
+
+    private fun requestWifiNamePermission() {
+        AlertDialog.Builder(this).setTitle("Read Wi-Fi names")
+            .setMessage("Android requires precise location access to read the connected Wi-Fi name. Galaxy uses the name to decide whether to search LAN. Names stay on this phone.")
+            .setPositiveButton("Continue") { _, _ -> requestFeaturePermissions(
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 25, "Precise location") }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun preferredWifiChanged() {
+        if (prefs.getString("transport", "auto") != "auto") return
+        upgradeDiscovery?.close(); upgradeDiscovery = null
+        if (idle() || discovery != null || probes.isNotEmpty()) connect() else scheduleUpgrade()
+    }
+
+    private fun automaticWifiAllowed() = PreferredWifi.allowed(this, prefs)
+
     private fun fallbackFrom(after: Route?): Boolean {
         val cm = Networks.manager(this)
         val internet = cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-        val next = RoutePlanner.next(after, prefs.getString("transport", "auto") ?: "auto", Networks.wifi(this, false) != null,
+        val next = RoutePlanner.next(after, prefs.getString("transport", "auto") ?: "auto",
+            if (prefs.getString("transport", "auto") == "auto") automaticWifiAllowed() else Networks.wifi(this, false) != null,
             internet, tunnel.load() != null, pairing.load() != null && !pairing.stale(), routeOrder())
         when (next) {
             Route.HOME_NETWORK -> if (after == null) return false else connect(skipOrder = true)
@@ -723,11 +804,11 @@ class MainActivity : Activity() {
             val current = activeRoute ?: return@postDelayed
             if (prefs.getString("transport", "auto") != "auto") return@postDelayed
             val order = routeOrder()
-            val lan = Networks.commaLan(this)?.takeIf { RoutePlanner.better(Route.HOME_NETWORK, current, order) }
-            if (lan == null && RoutePlanner.better(Route.HOME_NETWORK, current, order)) Networks.wifi(this, false)?.let { wifi ->
+            val lan = Networks.commaLan(this)?.takeIf { automaticWifiAllowed() && RoutePlanner.better(Route.HOME_NETWORK, current, order) }
+            if (lan == null && automaticWifiAllowed() && RoutePlanner.better(Route.HOME_NETWORK, current, order)) Networks.wifi(this, false)?.let { wifi ->
                 val search = LanDiscovery(this, wifi.first, 3000L) { hosts, _ ->
                     upgradeDiscovery = null
-                    if (generation == connectionGeneration.get() && prefs.getString("transport", "auto") == "auto" && hosts.isNotEmpty()) connect(hosts.first())
+                    if (generation == connectionGeneration.get() && prefs.getString("transport", "auto") == "auto" && hosts.isNotEmpty() && automaticWifiAllowed() && Networks.wifi(this, false)?.first == wifi.first) connect(hosts.first())
                 }
                 upgradeDiscovery = search; search.start()
             }
@@ -738,7 +819,7 @@ class MainActivity : Activity() {
                 val remote = if (!lanOk && current == Route.BLUETOOTH && credential != null && RoutePlanner.better(Route.TUNNEL, current, order)) TunnelProbe.check(this, credential) else null
                 runOnUiThread {
                     if (generation != connectionGeneration.get() || prefs.getString("transport", "auto") != "auto") return@runOnUiThread
-                    if (lanOk) connect(lan.second)
+                    if (lanOk && automaticWifiAllowed() && Networks.wifi(this, false)?.first == lan?.first) connect(lan!!.second)
                     else if (remote == TunnelProbe.Result.REACHABLE) { supersedeConnection(); showTunnel(credential!!) }
                     else if (remote == TunnelProbe.Result.BAD_KEY) tunnel.clear()
                 }
@@ -986,6 +1067,10 @@ class MainActivity : Activity() {
     }
     /** [fromMenu] keeps the old menu behavior: always confirm the address, then stay on Wi-Fi/LAN. */
     private fun discoverLan(automatic: Boolean = false, fromMenu: Boolean = false) {
+        if (automatic && prefs.getString("transport", "auto") == "auto" && !automaticWifiAllowed()) {
+            if (!fallbackFrom(Route.HOME_NETWORK)) disconnected()
+            return
+        }
         val wifi = Networks.wifi(this, false)
         if (wifi == null) {
             val text = "Join the same Wi-Fi network as StarPilot first."
@@ -996,12 +1081,23 @@ class MainActivity : Activity() {
         }
         stopDiscovery()
         discoveryAutomatic = automatic
+        if (automatic && prefs.getString("transport", "auto") == "auto") automaticLanNetwork = wifi.first
         val generation = connectionGeneration.get()
         val quickBluetoothFallback = automatic && prefs.getString("transport", "auto") == "auto" && pairing.load() != null
         val search = LanDiscovery(this, wifi.first, if (quickBluetoothFallback) GalaxyProbe.AUTOMATIC_DISCOVERY_MS else 12000L) { hosts, error ->
             discovery = null
             if (!isFinishing && !isDestroyed && generation == connectionGeneration.get()) {
+                if (Networks.wifi(this, false)?.first != wifi.first ||
+                    automatic && prefs.getString("transport", "auto") == "auto" && !automaticWifiAllowed()) {
+                    if (automatic) connect()
+                    return@LanDiscovery
+                }
                 fun select(host: String) {
+                    if (Networks.wifi(this, false)?.first != wifi.first ||
+                        automatic && prefs.getString("transport", "auto") == "auto" && !automaticWifiAllowed()) {
+                        if (automatic) connect()
+                        return
+                    }
                     val edit = prefs.edit().putString("host", host)
                     if (fromMenu) edit.putString("transport", "wifi")
                     edit.apply(); connect(host)
@@ -1494,6 +1590,7 @@ class MainActivity : Activity() {
             if (code == 10 && results.firstOrNull() != PackageManager.PERMISSION_GRANTED) permissionDenied(permissions, "Notifications")
             return
         }
+        if (code == 25) { preferredWifiChanged(); preferredWifiSettings(); return }
         if (code == 1 && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) Distribution.checkAsync(this)
         if (code == 5) {
             if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) pairPhone()
