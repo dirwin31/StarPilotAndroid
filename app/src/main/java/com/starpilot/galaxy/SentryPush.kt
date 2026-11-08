@@ -113,7 +113,7 @@ object SentryPush {
     @Synchronized fun receive(ctx: Context, data: Map<String, String>, fromPush: Boolean = true, demo: Boolean = false): Boolean {
         val p = prefs(ctx)
         if (!demo && suspended) return false
-        if (!demo && !p.getBoolean("sentryPushEnabled", false) || data["type"] != "sentry" || data["kind"] !in setOf("warning", "alarm", "test") || !permitted(ctx)) return false
+        if (!demo && !p.getBoolean("sentryPushEnabled", false) || data["type"] != "sentry" || data["kind"] !in setOf("warning", "alarm", "battery", "test") || !permitted(ctx)) return false
         val id = data["eventId"]?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,64}")) } ?: return false
         val seen = runCatching { JSONArray(p.getString("sentrySeenIds", "[]")) }.getOrDefault(JSONArray())
         val dedupe = SentryDedupe((0 until seen.length()).map { seen.getString(it) })
@@ -123,9 +123,9 @@ object SentryPush {
         val notificationId = Notifications.SENTRY_BASE + (id.hashCode() and 0x3FF)
         val intent = Intent(ctx, MainActivity::class.java).putExtra("openRoute", "/cameras/events").putExtra("demo", demo)
         val open = PendingIntent.getActivity(ctx, notificationId, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val title = when (data["kind"]) { "alarm" -> "Sentry alarm"; "test" -> "Galaxy test alert"; else -> "Sentry: motion detected" }
+        val title = when (data["kind"]) { "alarm" -> "Sentry alarm"; "battery" -> "Sentry: battery low"; "test" -> "Galaxy test alert"; else -> "Sentry: motion detected" }
         val builder = Notification.Builder(ctx, Notifications.SENTRY_CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle(title).setContentText(data["label"].orEmpty().take(64)).setAutoCancel(true).setContentIntent(open)
+            .setContentTitle(title).setContentText(data["detail"]?.take(160) ?: data["label"].orEmpty().take(64)).setAutoCancel(true).setContentIntent(open)
             .setOnlyAlertOnce(true)
         if (data["kind"] == "alarm") builder.setCategory(Notification.CATEGORY_ALARM)
         if (demo) manager.notify(notificationId, builder.build())
@@ -136,6 +136,7 @@ object SentryPush {
             val test = data["kind"] == "test"
             Thread {
                 val images = java.util.concurrent.FutureTask {
+                    if (data["kind"] == "battery") return@FutureTask null
                     val current = api ?: SentryApi.best(ctx) ?: return@FutureTask null
                     val wide = if (test) null else runCatching { decode(current.bytes("/api/sentry/image/$id/wide"), 1) }.getOrNull()
                     val cabin = runCatching {

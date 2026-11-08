@@ -1,7 +1,7 @@
 const androidApps = new Set(['com.starpilot.galaxy'])
 const defaultIosApps = 'link.galaxy.bluetooth.natehuby76'
 export const iosApps = env => new Set(String(env?.IOS_APP_IDS ?? defaultIosApps).split(',').map(id => id.trim()).filter(Boolean))
-const kinds = new Set(['warning', 'alarm', 'test'])
+const kinds = new Set(['warning', 'alarm', 'battery', 'test'])
 const encode = value => new TextEncoder().encode(value)
 const b64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 const json = (status, value) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } })
@@ -26,7 +26,8 @@ async function importApns(body, token, fetcher) {
 
 export function valid(body, ios = new Set()) {
   return body !== null && typeof body === 'object' && !Array.isArray(body) &&
-    Object.keys(body).sort().join(',') === 'appId,eventId,kind,label,token,wallTimeNs' &&
+    Object.keys(body).sort().join(',') === (body.kind === 'battery' ? 'appId,detail,eventId,kind,label,token,wallTimeNs' : 'appId,eventId,kind,label,token,wallTimeNs') &&
+    (body.kind !== 'battery' || typeof body.detail === 'string' && body.detail.length > 0 && body.detail.length <= 160 && !/[\x00-\x1f\x7f]/.test(body.detail)) &&
     typeof body.token === 'string' && /^[^\s\x00-\x1f\x7f]{1,4096}$/.test(body.token) && (androidApps.has(body.appId) || ios.has(body.appId)) && kinds.has(body.kind) &&
     typeof body.eventId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(body.eventId) &&
     typeof body.wallTimeNs === 'number' && Number.isInteger(body.wallTimeNs) && body.wallTimeNs > 0 && body.wallTimeNs < 2 ** 63 &&
@@ -52,13 +53,14 @@ async function accessToken(env, fetcher) {
   return oauth.token
 }
 
-const titles = { alarm: 'Sentry alarm', warning: 'Sentry motion', test: 'Galaxy test alert' }
+const titles = { alarm: 'Sentry alarm', warning: 'Sentry motion', battery: 'Sentry: battery low', test: 'Galaxy test alert' }
 
 export function fcmMessage(body, ios = false) {
-  const data = { type: 'sentry', kind: body.kind, eventId: body.eventId, wallTimeNs: String(body.wallTimeNs), label: body.label }
+  const data = { type: 'sentry', kind: body.kind, eventId: body.eventId, wallTimeNs: String(body.wallTimeNs), label: body.label,
+    ...(body.detail ? { detail: body.detail } : {}) }
   if (!ios) return { message: { token: body.token, android: { priority: 'HIGH', ttl: '600s', restricted_package_name: body.appId }, data } }
   return { message: { token: body.token, data,
-    notification: { title: titles[body.kind], body: body.label || 'Parked motion detected' },
+    notification: { title: titles[body.kind], body: body.detail || body.label || 'Parked motion detected' },
     apns: { headers: { 'apns-priority': '10', 'apns-push-type': 'alert', 'apns-expiration': String(Math.floor(Date.now() / 1000) + 600), 'apns-collapse-id': body.eventId },
       payload: { aps: { sound: 'default', 'thread-id': 'sentry', 'mutable-content': 1 } } } } }
 }

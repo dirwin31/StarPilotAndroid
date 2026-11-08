@@ -69,3 +69,22 @@ test('Apple tokens are converted through Firebase and sent as visible alerts', a
   assert.equal((await handle(request({ ...phone, token: `apns.production.${'ef'.repeat(32)}` }), env, failed, async () => 'oauth')).status, 502)
   assert.equal((await handle(request({ ...phone, token: 'apns.production.xyz' }), env, () => assert.fail('must not send'), async () => 'oauth')).status, 400)
 })
+test('battery alerts carry their voltage text to Android data and the iPhone body', () => {
+  const battery = { ...body, kind: 'battery', detail: 'Car battery is low (12.0 V). The device and Sentry turn off at 11.8 V.' }
+  assert.ok(valid(battery))
+  for (const value of [{ ...body, kind: 'battery' }, { ...body, detail: battery.detail }, { ...battery, detail: '' }, { ...battery, detail: 'a\nb' }, { ...battery, detail: 'a'.repeat(161) }])
+    assert.equal(valid(value), false)
+  assert.equal(fcmMessage(battery).message.data.detail, battery.detail)
+  const phone = fcmMessage({ ...battery, appId: 'link.galaxy.bluetooth.natehuby76' }, true).message
+  assert.equal(phone.notification.title, 'Sentry: battery low')
+  assert.equal(phone.notification.body, battery.detail)
+  assert.equal(fcmMessage(body).message.data.detail, undefined)
+})
+test('battery detail reaches the outgoing FCM request through the handler', async () => {
+  const battery = { ...body, kind: 'battery', detail: 'Car battery is low (12.0 V). The device and Sentry turn off at 11.8 V.' }
+  const sent = []
+  const response = await handle(request(battery), environment(), async (url, init) => { sent.push(JSON.parse(init.body)); return Response.json({}) }, async () => 'oauth')
+  assert.equal(response.status, 200)
+  assert.equal(sent[0].message.data.kind, 'battery')
+  assert.equal(sent[0].message.data.detail, battery.detail)
+})
