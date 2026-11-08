@@ -728,7 +728,7 @@ class MainActivity : Activity() {
             setPadding(dp(24), dp(8), dp(24), dp(8))
         }
         fun label(value: String) = TextView(this).apply {
-            text = value; textSize = 14f; setPadding(0, dp(8), 0, dp(8))
+            text = value; textSize = 14f; setTextColor(Palette.MUTED); setPadding(0, dp(8), 0, dp(8))
         }
         content.addView(label("Automatically search for StarPilot only on these Wi-Fi networks. Elsewhere, use Remote or Bluetooth."))
         content.addView(Switch(this).apply {
@@ -740,25 +740,45 @@ class MainActivity : Activity() {
                 preferredWifiChanged()
             }
         })
-        val add = Button(this).apply { text = "Add current Wi-Fi" }
-        content.addView(add)
-        content.addView(label(current ?: if (hasWifi) "Wi-Fi name unavailable" else "Connect to Wi-Fi to add a network."))
-        content.addView(label("Saved networks"))
+        val add = TextView(this).apply {
+            text = "Add current Wi-Fi"; textSize = 16f; typeface = Palette.medium
+            setTextColor(Palette.VIOLET_SOFT)
+            gravity = android.view.Gravity.CENTER; minHeight = dp(48)
+            isClickable = true; isFocusable = true
+            background = android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(Palette.alpha(Palette.VIOLET, 60)),
+                android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(14).toFloat(); setColor(Palette.alpha(Palette.VIOLET, 35))
+                    setStroke(dp(1), Palette.VIOLET)
+                }, null)
+        }
+        content.addView(add, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        val currentLabel = label(current?.let { "Connected: $it" } ?: if (hasWifi) "Allow Wi-Fi name access to add this network." else "Connect to Wi-Fi to add a network.")
+        content.addView(currentLabel)
+        content.addView(label("Saved networks").apply { setTextColor(Palette.VIOLET_SOFT); typeface = Palette.medium })
         val saved = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply { addView(saved) }
         content.addView(scroll, LinearLayout.LayoutParams(-1, dp(200)))
         fun refreshSaved() {
             val names = prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty().sorted()
             add.isEnabled = hasWifi && (current == null || current !in names)
-            add.text = if (current != null && current in names) "Current Wi-Fi added" else "Add current Wi-Fi"
+            val alreadySaved = current != null && current in names
+            add.visibility = if (alreadySaved) android.view.View.GONE else android.view.View.VISIBLE
+            currentLabel.visibility = if (alreadySaved) android.view.View.GONE else android.view.View.VISIBLE
+            add.alpha = if (add.isEnabled) 1f else 0.5f
             saved.removeAllViews()
             if (names.isEmpty()) saved.addView(label("Add the Wi-Fi networks where your StarPilot is usually connected."))
             names.forEach { name ->
                 saved.addView(LinearLayout(this).apply {
                     gravity = android.view.Gravity.CENTER_VERTICAL
-                    addView(label(name), LinearLayout.LayoutParams(0, -2, 1f))
+                    setPadding(dp(12), 0, dp(4), 0)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(12).toFloat(); setColor(Palette.SPACE); setStroke(dp(1), Palette.LINE)
+                    }
+                    addView(label(name).apply { setTextColor(Palette.ON); textSize = 16f }, LinearLayout.LayoutParams(0, -2, 1f))
                     addView(ImageButton(this@MainActivity).apply {
                         setImageResource(android.R.drawable.ic_menu_delete)
+                        imageTintList = android.content.res.ColorStateList.valueOf(Palette.ERROR)
                         contentDescription = "Remove $name"
                         setBackgroundColor(Color.TRANSPARENT)
                         setOnClickListener {
@@ -1615,7 +1635,13 @@ class MainActivity : Activity() {
             if (code == 10 && results.firstOrNull() != PackageManager.PERMISSION_GRANTED) permissionDenied(permissions, "Notifications")
             return
         }
-        if (code == 25) { preferredWifiChanged(); preferredWifiSettings(); return }
+        if (code == 25) {
+            PreferredWifi.currentName(this)?.let { name ->
+                prefs.edit().putStringSet(PreferredWifi.NETWORKS,
+                    prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty() + name).apply()
+            }
+            preferredWifiChanged(); preferredWifiSettings(); return
+        }
         if (code == 1 && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) Distribution.checkAsync(this)
         if (code == 5) {
             if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) pairPhone()
