@@ -584,8 +584,7 @@ class MainActivity : Activity() {
             .onOrder { order -> prefs.edit().putString("routeOrder", order.joinToString(",") { it.key }).apply() }
             .onTransport { prefs.edit().putString("transport", it.key).apply(); connect() }
             .group("Automatic LAN search") {
-                action("Only search LAN on preferred Wi-Fi", if (prefs.getBoolean(PreferredWifi.ENABLED, false)) "On" else "Off · search any Wi-Fi") { preferredWifiSettings() }
-                action("Preferred Wi-Fi networks", "${prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty().size} saved · add or remove networks") { preferredWifiSettings() }
+                action("Preferred Wi-Fi", if (prefs.getBoolean(PreferredWifi.ENABLED, false)) "Search saved networks only" else "Search any Wi-Fi network") { preferredWifiSettings() }
             }
             .group("Remote access") {
                 if (tunnel.load() != null) {
@@ -720,49 +719,75 @@ class MainActivity : Activity() {
         lanPicker?.dismiss(); lanPicker = null
     }
     private fun preferredWifiSettings() {
-        val enabled = prefs.getBoolean(PreferredWifi.ENABLED, false)
-        val names = prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty().sorted()
+        fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
         val current = PreferredWifi.currentName(this)
+        val hasWifi = Networks.wifi(this, false) != null
         val hasPermission = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val options = mutableListOf(if (enabled) "Turn restriction off" else "Only search LAN on preferred Wi-Fi")
-        options.add(if (!hasPermission) "Allow Wi-Fi name access" else "Add current Wi-Fi")
-        options.addAll(names.map { "Remove $it" })
-        val status = when {
-            Networks.wifi(this, false) == null -> "Not on Wi-Fi. Automatic goes straight to Remote or Bluetooth."
-            current == null -> "Wi-Fi name unavailable. Allow precise location and enable Location in Android settings to read Wi-Fi names."
-            else -> "Current Wi-Fi: $current"
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), dp(8))
         }
-        AlertDialog.Builder(this).setTitle("Preferred Wi-Fi")
-            .setItems(options.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> {
-                        prefs.edit().putBoolean(PreferredWifi.ENABLED, !enabled).apply()
-                        preferredWifiChanged()
-                        if (!enabled && !hasPermission) requestWifiNamePermission() else preferredWifiSettings()
-                    }
-                    1 -> {
-                        if (!hasPermission) requestWifiNamePermission()
-                        else if (current == null) AlertDialog.Builder(this).setTitle("Wi-Fi name unavailable")
-                            .setMessage(status).setPositiveButton("Location settings") { _, _ -> startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
-                            .setNegativeButton("Done", null).show()
-                        else {
-                            prefs.edit().putStringSet(PreferredWifi.NETWORKS, names.toSet() + current).apply()
-                            preferredWifiChanged(); preferredWifiSettings()
-                        }
-                    }
-                    else -> {
-                        prefs.edit().putStringSet(PreferredWifi.NETWORKS, names.toSet() - names[which - 2]).apply()
-                        preferredWifiChanged(); preferredWifiSettings()
-                    }
-                }
+        fun label(value: String) = TextView(this).apply {
+            text = value; textSize = 14f; setPadding(0, dp(8), 0, dp(8))
+        }
+        content.addView(label("Automatically search for StarPilot only on these Wi-Fi networks. Elsewhere, use Remote or Bluetooth."))
+        content.addView(Switch(this).apply {
+            text = "Only search on preferred Wi-Fi"
+            minHeight = dp(48)
+            isChecked = prefs.getBoolean(PreferredWifi.ENABLED, false)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(PreferredWifi.ENABLED, checked).apply()
+                preferredWifiChanged()
             }
-            .setCustomTitle(TextView(this).apply {
-                text = "Preferred Wi-Fi · ${if (enabled) "On" else "Off"}\n\n$status\n\n" +
-                    "Automatic only. Galaxy hotspot and manual LAN searches remain available. " +
-                    "With the restriction on, unknown Wi-Fi names are skipped. ${names.size} networks saved."
-                setPadding(40, 32, 40, 16); textSize = 16f
-            })
-            .setNegativeButton("Done", null).show()
+        })
+        val add = Button(this).apply { text = "Add current Wi-Fi" }
+        content.addView(add)
+        content.addView(label(current ?: if (hasWifi) "Wi-Fi name unavailable" else "Connect to Wi-Fi to add a network."))
+        content.addView(label("Saved networks"))
+        val saved = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply { addView(saved) }
+        content.addView(scroll, LinearLayout.LayoutParams(-1, dp(200)))
+        fun refreshSaved() {
+            val names = prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty().sorted()
+            add.isEnabled = hasWifi && (current == null || current !in names)
+            add.text = if (current != null && current in names) "Current Wi-Fi added" else "Add current Wi-Fi"
+            saved.removeAllViews()
+            if (names.isEmpty()) saved.addView(label("Add the Wi-Fi networks where your StarPilot is usually connected."))
+            names.forEach { name ->
+                saved.addView(LinearLayout(this).apply {
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    addView(label(name), LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(ImageButton(this@MainActivity).apply {
+                        setImageResource(android.R.drawable.ic_menu_delete)
+                        contentDescription = "Remove $name"
+                        setBackgroundColor(Color.TRANSPARENT)
+                        setOnClickListener {
+                            val remaining = prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty() - name
+                            prefs.edit().putStringSet(PreferredWifi.NETWORKS, remaining).apply()
+                            preferredWifiChanged(); refreshSaved()
+                        }
+                    }, LinearLayout.LayoutParams(dp(48), dp(48)))
+                })
+            }
+        }
+        val dialog = AlertDialog.Builder(this).setTitle("Preferred Wi-Fi")
+            .setView(content).setPositiveButton("Done", null).create()
+        add.setOnClickListener {
+            if (!hasPermission) { dialog.dismiss(); requestWifiNamePermission() }
+            else if (current == null) {
+                AlertDialog.Builder(this).setTitle("Wi-Fi name unavailable")
+                    .setMessage("Enable Location in Android settings so Galaxy can read your Wi-Fi name.")
+                    .setPositiveButton("Location settings") { _, _ ->
+                        dialog.dismiss(); startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                    }.setNegativeButton("Cancel", null).show()
+            } else {
+                val names = prefs.getStringSet(PreferredWifi.NETWORKS, emptySet()).orEmpty() + current
+                prefs.edit().putStringSet(PreferredWifi.NETWORKS, names).apply()
+                preferredWifiChanged(); refreshSaved()
+            }
+        }
+        refreshSaved()
+        dialog.show()
     }
 
     private fun requestWifiNamePermission() {
