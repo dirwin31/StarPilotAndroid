@@ -5,6 +5,14 @@
         <item name="android:navigationBarColor">#070712</item><item name="android:statusBarColor">#070712</item>
         <item name="android:alertDialogTheme">@style/AppDialog</item>
     </style>
+    <!-- The share card floats over the maps app that shared the place. -->
+    <style name="ShareTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item><item name="android:colorAccent">#9d72ff</item>
+        <item name="android:windowIsTranslucent">true</item><item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item><item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item><item name="android:windowContentOverlay">@null</item>
+        <item name="android:statusBarColor">@android:color/transparent</item><item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
     <!-- Galaxy surface instead of the stock grey Material dialog. -->
     <style name="AppDialog" parent="android:style/Theme.Material.Dialog.Alert">
         <item name="android:windowBackground">@drawable/dialog_surface</item>

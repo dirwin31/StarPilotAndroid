@@ -32,6 +32,7 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
             <intent-filter><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="starpilot-remote" android:host="add" /></intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
         <activity android:name=".DiscordReportActivity" android:exported="true" android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden">
@@ -42,7 +43,8 @@
                 <data android:scheme="starpilot-discord" android:host="callback" />
             </intent-filter>
         </activity>
-        <activity android:name=".ShareActivity" android:exported="true" android:theme="@style/AppTheme">
+        <activity android:name=".ShareActivity" android:exported="true" android:theme="@style/ShareTheme"
+            android:excludeFromRecents="true" android:taskAffinity="" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode">
             <intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="text/plain" /></intent-filter>
             <intent-filter><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="geo" /><data android:scheme="google.navigation" /></intent-filter>
         </activity>
@@ -51,5 +53,7 @@
         <service android:name="link.firestar.companion.GalaxyBridgeService" android:exported="true" android:enabled="${aaBridgeEnabled}" />
         <service android:name=".PhoneGpsService" android:exported="false" android:foregroundServiceType="location" />
         <service android:name=".SentryPollJob" android:exported="true" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <service android:name=".PendingShareJob" android:exported="true" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <receiver android:name=".PendingShareReceiver" android:exported="false" />
     </application>
 </manifest>

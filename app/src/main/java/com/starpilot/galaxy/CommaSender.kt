@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Network
-import android.net.NetworkCapabilities
 import android.os.Build
 import org.json.JSONObject
 import java.io.IOException
@@ -17,33 +16,26 @@ class CommaSender(context: Context) {
     private val context = context.applicationContext
     private val prefs = this.context.getSharedPreferences("companion", Context.MODE_PRIVATE)
 
-    /** Returns null once comma is routing to the place, else why it could not be sent. */
-    fun send(place: SharedDestination.Place): String? {
+    /** Returns comma's answer from the first route that reaches it; throws [IOException] with the reason when none does. */
+    fun share(text: String): CommaNavigation.Outcome {
         var reason: String? = null
         val routes = listOf<() -> CommaNavigation.Api?>({ BleTransport.active?.takeIf { it.open }?.let(::BluetoothApi) }, ::lan, ::tunnel, ::bluetooth)
         for (route in routes) {
             val api = try { route() } catch (_: Exception) { null } ?: continue
             try {
-                CommaNavigation.start(api, place)
-                return null
-            } catch (error: CommaNavigation.Refused) {
-                return error.message
+                return CommaNavigation.share(api, text)
             } catch (error: Exception) {
                 if (api is HttpApi && api.tunnel && error is CommaNavigation.SignIn) reason = "Pair the Remote route again"
             } finally { (api as? BluetoothApi)?.takeIf { it.own }?.transport?.close() }
         }
-        return reason ?: "StarPilot is not reachable"
+        throw IOException(reason ?: UNREACHABLE)
     }
 
     private fun lan(): CommaNavigation.Api? = Networks.commaLan(context)?.let { (network, origin) -> HttpApi(network, origin, origin, false) }
 
     private fun tunnel(): CommaNavigation.Api? {
         val credential = TunnelStore(context).load() ?: return null
-        val cm = Networks.manager(context)
-        // The comma hotspot has no internet; the tunnel needs a network that does.
-        val network = (listOfNotNull(cm.activeNetwork) + cm.allNetworks).firstOrNull {
-            cm.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-        } ?: return null
+        val network = Networks.internet(context) ?: return null
         return HttpApi(network, credential.webUrl.trimEnd('/'), TUNNEL_ORIGIN, true, "galaxy_session=${credential.sessionToken}")
     }
 
@@ -82,6 +74,8 @@ class CommaSender(context: Context) {
                 try {
                     connection.requestMethod = method
                     if (body != null) {
+                        // comma may geocode the shared place before it answers.
+                        connection.readTimeout = 30000
                         connection.doOutput = true
                         connection.setRequestProperty("Content-Type", "application/json")
                         connection.outputStream.use { it.write(body.toByteArray()) }
@@ -111,6 +105,7 @@ class CommaSender(context: Context) {
     }
 
     companion object {
+        const val UNREACHABLE = "StarPilot is not reachable"
         private const val MAX_BODY = 1024 * 1024
         private const val TUNNEL_ORIGIN = "https://galaxy.firestar.link"
         private fun state(code: Int, text: String): CommaNavigation.State {
@@ -118,7 +113,7 @@ class CommaSender(context: Context) {
             val destination = json.optJSONObject("destination")
             return CommaNavigation.State(code, json.optString("revision"), json.optBoolean("enabled"), json.optBoolean("hasKey"),
                 destination?.optDouble("latitude")?.takeUnless { it.isNaN() }, destination?.optDouble("longitude")?.takeUnless { it.isNaN() },
-                json.optString("error").ifEmpty { null })
+                json.optString("error").ifEmpty { null }, json.optJSONObject("shared")?.optString("name")?.ifEmpty { null }, json.has("query"))
         }
     }
 }

@@ -36,4 +36,11 @@ class SharedDestinationTest {
         assertTrue(SharedDestination.isGoogleMapsHost("www.google.com"))
         assertFalse(SharedDestination.isGoogleMapsHost("evilgoogle.com"))
     }
+
+    @Test fun addsTheSubjectWhenTheTextLacksTheName() {
+        assertEquals("Bellagio\nhttps://maps.app.goo.gl/AbC123", SharedDestination.shareText(" Bellagio ", "https://maps.app.goo.gl/AbC123"))
+        assertEquals("Bellagio\nLas Vegas\nhttps://maps.app.goo.gl/AbC123", SharedDestination.shareText("Bellagio", "Bellagio\nLas Vegas\nhttps://maps.app.goo.gl/AbC123"))
+        assertEquals("geo:1,2", SharedDestination.shareText(null, "geo:1,2"))
+        assertEquals(SharedDestination.MAX_TEXT, SharedDestination.shareText("Name", "x".repeat(9000)).length)
+    }
 }

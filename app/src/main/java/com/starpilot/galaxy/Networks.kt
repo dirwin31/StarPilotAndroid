@@ -17,6 +17,15 @@ object Networks {
                 ?.let { network to it }
         }
     }
+    /** A validated network with internet, comma's hotspot last. */
+    fun internet(context: Context): Network? {
+        val cm = manager(context)
+        val hotspot = wifi(context)?.first
+        return (listOfNotNull(cm.activeNetwork) + cm.allNetworks).sortedBy { it == hotspot }.firstOrNull {
+            cm.getNetworkCapabilities(it)?.let { caps -> caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) } == true
+        }
+    }
     /** The Wi-Fi network that reaches comma and its origin: the hotspot, else the LAN host the app saved when it found comma. */
     fun commaLan(context: Context): Pair<Network, String>? {
         val hotspot = wifi(context)

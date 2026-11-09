@@ -145,6 +145,7 @@ class BleTransport(context: Context, private val key: ByteArray?, private val he
             val previous = active
             active = this
             if (previous !== this) previous?.close()
+            PendingShare.deliver(context)
             return device.address
         } catch (e: Exception) { close(); throw e }
     }

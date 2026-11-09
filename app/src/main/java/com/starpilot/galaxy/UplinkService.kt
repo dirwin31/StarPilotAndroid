@@ -18,6 +18,7 @@ class UplinkService : Service() {
     @Volatile private var cellular: Network? = null
     private val sessionLock = Any()
     @Volatile private var stopped = false
+    private var onHotspot = false
     @Volatile private var socks: SocksServer? = null
     private var identity: String? = null
     private var cookie = ""
@@ -79,6 +80,8 @@ class UplinkService : Service() {
         try {
             if (stopped || !prefs.getBoolean("enabled", false)) { reset(); return }
             val wifi = Networks.wifi(this)
+            if (wifi != null && !onHotspot) PendingShare.deliver(this)
+            onHotspot = wifi != null
             val cell = cellular
             if (wifi == null || cell == null || Networks.manager(this).getNetworkCapabilities(cell)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) { reset(); update("Waiting for Galaxy Wi-Fi and mobile data"); return }
             val current = "${wifi.first}:${wifi.second.hostAddress}:$cell"

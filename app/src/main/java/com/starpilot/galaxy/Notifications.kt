@@ -7,6 +7,7 @@ object Notifications {
     const val APP_UPDATE_DONE = 4
     const val DEMO_UPLINK = 6
     const val DEMO_GPS = 7
+    const val SHARED_PLACE = 8
     const val DEMO_CHANNEL = "demo"
     const val SENTRY_BASE = 1000
     const val UPLINK_CHANNEL = "uplink"

@@ -14,6 +14,12 @@ sealed class SharedDestination {
             Regex("geo:$NUMBER,\\s*$NUMBER"), Regex("@$NUMBER,\\s*$NUMBER"))
         val SHORT_LINK = Regex("https://(?:maps\\.app\\.goo\\.gl|goo\\.gl/maps)/[A-Za-z0-9_-]{1,64}")
 
+        /** Google Maps often puts the place name only in the subject. */
+        fun shareText(subject: String?, text: String): String {
+            val name = subject?.trim().orEmpty()
+            return (if (name.isEmpty() || text.contains(name)) text else "$name\n$text").take(MAX_TEXT)
+        }
+
         fun isGoogleMapsHost(host: String) = host == "maps.app.goo.gl" || host == "goo.gl" || host == "google.com" || host.endsWith(".google.com")
 
         /** Destination coordinates take precedence over a map's viewport (@lat,lng). */

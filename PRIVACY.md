@@ -16,7 +16,7 @@ _Last updated: 2026-11-05_
 
 **Location (optional).** If you turn on phone GPS sharing, Galaxy sends your phone's precise location to your own comma device while sharing is on. It runs as a foreground service with a visible notification. Location is not sent to us. Bluetooth scanning is declared as never used to derive location.
 
-**Shared places.** When you share a place from a maps app to Galaxy, Galaxy sends its name and coordinates to your comma to start the route, over the same connections. Google Maps short links are opened on your phone, only on Google's servers, to read the place's location.
+**Shared places.** When you share a place from a maps app to Galaxy, Galaxy sends the shared text (the place's name, address and link) to your comma to start the route, over the same connections. Google Maps short links are opened on your phone, only on Google's servers, to read the full link. When the link has no coordinates, the comma looks the place up with the map provider you set up, Mapbox or Google. If your comma is not reachable, the shared text stays on your phone for up to 12 hours and is sent when your phone next connects to the comma; sharing a new place replaces it. A notification shows the result if notifications are allowed.
 
 **Notifications (optional).** If you enable Sentry alerts, Galaxy registers a push token (Firebase Cloud Messaging) so your comma can notify your phone. The token and alert events pass through Firebase and a small push relay that forwards them and keeps no data. Without Firebase, alerts use polling while the app is connected.
 

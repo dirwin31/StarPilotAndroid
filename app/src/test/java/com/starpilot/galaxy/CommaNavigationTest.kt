@@ -51,6 +51,48 @@ class CommaNavigationTest {
         assertThrows(java.io.IOException::class.java) { CommaNavigation.start(other, place) }
     }
 
+    private val link = "https://www.google.com/maps/place/Bellagio/@36.1,-115.1,17z/data=!3d36.1126!4d-115.1767"
+
+    @Test fun shareStartsThePlaceCommaFound() {
+        val api = Fake(mutableListOf(State(200, "r1")), mutableListOf(State(200, "r2", true, true, sharedName = "Bellagio Hotel")))
+        assertEquals(CommaNavigation.Outcome.Started("Bellagio Hotel"), CommaNavigation.share(api, "Bellagio\n$link"))
+        assertEquals("""{"action":"share","revision":"r1","text":"Bellagio\u000a$link"}""", api.sent.single())
+    }
+
+    @Test fun shareAsksForASearchOrShowsTheRefusal() {
+        val ambiguous = Fake(mutableListOf(State(200, "r1")), mutableListOf(State(400, error = "Several places match", query = true)))
+        assertEquals(CommaNavigation.Outcome.NeedsSearch, CommaNavigation.share(ambiguous, "Starbucks"))
+        val refused = Fake(mutableListOf(State(200, "r1")), mutableListOf(State(400, error = "Set up a map provider in Galaxy navigation")))
+        assertEquals(CommaNavigation.Outcome.Refused("Set up a map provider in Galaxy navigation"), CommaNavigation.share(refused, link))
+        assertEquals(1, refused.sent.size)
+    }
+
+    @Test fun shareRetriesOnceAfterAConflict() {
+        val api = Fake(mutableListOf(State(200, "r1"), State(200, "r2")), mutableListOf(State(409), State(200, "r3", sharedName = "Bellagio")))
+        assertEquals(CommaNavigation.Outcome.Started("Bellagio"), CommaNavigation.share(api, link))
+        assertTrue(api.sent[1].contains("\"revision\":\"r2\""))
+        val busy = Fake(mutableListOf(State(200, "r1"), State(200, "r2"), State(200, "r3")), mutableListOf(State(409), State(409)))
+        assertThrows(java.io.IOException::class.java) { CommaNavigation.share(busy, link) }
+        assertEquals(2, busy.sent.size)
+    }
+
+    @Test fun olderCommaGetsThePlaceParsedOnThePhone() {
+        val api = Fake(mutableListOf(State(200, "r1", true, true), State(200, "r2", true, true)),
+            mutableListOf(State(400, error = CommaNavigation.OLD_COMMA), State(200, "r3", true, true, 36.1126, -115.1767)))
+        assertEquals(CommaNavigation.Outcome.Started("Bellagio"), CommaNavigation.share(api, "Bellagio\n$link"))
+        assertTrue(api.sent[1].startsWith("""{"action":"select","revision":"r2","destination":{"name":"Bellagio","""))
+        val search = Fake(mutableListOf(State(200, "r1", true, true)), mutableListOf(State(400, error = CommaNavigation.OLD_COMMA)))
+        assertEquals(CommaNavigation.Outcome.NeedsSearch, CommaNavigation.share(search, "Bellagio, Las Vegas"))
+        val noKey = Fake(mutableListOf(State(200, "r1", true, false), State(200, "r2", true, false)), mutableListOf(State(400, error = CommaNavigation.OLD_COMMA)))
+        assertTrue(CommaNavigation.share(noKey, link) is CommaNavigation.Outcome.Refused)
+    }
+
+    @Test fun shareReportsSignInAndUnreachable() {
+        assertThrows(CommaNavigation.SignIn::class.java) { CommaNavigation.share(Fake(mutableListOf(State(401)), mutableListOf()), link) }
+        assertThrows(CommaNavigation.SignIn::class.java) { CommaNavigation.share(Fake(mutableListOf(State(200, "r1")), mutableListOf(State(401))), link) }
+        assertThrows(java.io.IOException::class.java) { CommaNavigation.share(Fake(mutableListOf(State(502)), mutableListOf()), link) }
+    }
+
     @Test fun quotesControlCharacters() {
         assertEquals("\"a\\u000ab\\u0001\\\\\"", CommaNavigation.quote("a\nb\u0001\\"))
     }

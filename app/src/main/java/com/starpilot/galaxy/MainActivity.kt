@@ -60,6 +60,7 @@ class MainActivity : Activity() {
         override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
             if (network in knownWifi || properties.linkAddresses.none { it.address is Inet4Address && it.address.isSiteLocalAddress }) return
             knownWifi.add(network)
+            PendingShare.deliver(this@MainActivity)
             // Open Galaxy as soon as the phone joins a Wi-Fi network, without waiting for "Try again".
             handler.post {
                 val mayPreemptBluetooth = automaticWifiAllowed() && bluetoothAttemptAutomatic && screen?.state(Route.BLUETOOTH) == RouteState.TRYING
@@ -180,6 +181,7 @@ class MainActivity : Activity() {
         if (intent.getBooleanExtra("demo", false)) { showDemo(); return }
         share = intent.getStringExtra("share")?.take(8192)
         Distribution.initialize(this)
+        ShareShortcut.publish(this)
         handler.postDelayed(pollSentry, 120000)
         handler.postDelayed(upgradeRoutes, 15000)
         handler.postDelayed(routeHealth, 4000)
@@ -1835,7 +1837,7 @@ class MainActivity : Activity() {
     @android.annotation.SuppressLint("GestureBackNavigation")
     @Deprecated("Legacy back handling for API 26–32") override fun onBackPressed() = navigateBack()
     override fun onResume() {
-        super.onResume(); resumed = true; if (demoSession != null) return; recovery.resumed(); GalaxyUpdates.checkAsync(this) {}; Distribution.checkAsync(this); checkMusicBond()
+        super.onResume(); resumed = true; if (demoSession != null) return; PendingShare.deliver(this); recovery.resumed(); GalaxyUpdates.checkAsync(this) {}; Distribution.checkAsync(this); checkMusicBond()
         Distribution.resume(this)
     }
     override fun onPause() { resumed = false; super.onPause() }

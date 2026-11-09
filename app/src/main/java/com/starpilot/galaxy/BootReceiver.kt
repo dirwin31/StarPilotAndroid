@@ -8,6 +8,7 @@ import android.content.Intent
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        if (PendingShare.waiting(context)) runCatching { PendingShareJob.listen(context) }
         val prefs = context.getSharedPreferences("companion", Context.MODE_PRIVATE)
         if (prefs.getBoolean("autoStart", false) && prefs.getBoolean("enabled", false)) {
             context.startForegroundService(Intent(context, UplinkService::class.java))
