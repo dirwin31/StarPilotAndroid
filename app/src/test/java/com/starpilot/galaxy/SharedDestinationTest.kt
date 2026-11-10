@@ -6,6 +6,15 @@ import org.junit.Test
 class SharedDestinationTest {
     private fun place(text: String) = SharedDestination.parse(text) as? SharedDestination.Place
 
+    @Test fun readsWazeLinks() {
+        val short = place("https://waze.com/ul/h9q8yy4")!!
+        assertEquals(37.762756, short.latitude, 1e-6)
+        assertEquals(-122.426147, short.longitude, 1e-6)
+        assertEquals(-122.41, place("https://waze.com/live-map/directions?to=ll.37.77%2C-122.41")?.longitude ?: 0.0, 1e-6)
+        assertEquals(-122.4194, place("https://waze.com/ul?ll=37.7749,-122.4194&navigate=yes")?.longitude ?: 0.0, 1e-6)
+        assertEquals(SharedDestination.Search("Starbucks Main St"), SharedDestination.parse("https://waze.com/ul?q=Starbucks%20Main%20St&navigate=yes"))
+    }
+
     @Test fun readsCoordinatesFromMapLinks() {
         for (text in listOf("https://maps.google.com/@12.3,-45.6,15z", "https://maps.google.com/?q=12.3,-45.6", "geo:12.3,-45.6(Home)",
                 "google.navigation:q=12.3,-45.6", "https://maps.google.com/?daddr=12.3,-45.6",
