@@ -56,7 +56,7 @@ android {
         }
     }
     if (firebaseEnabled) {
-        sourceSets.getByName("direct").manifest.srcFile("src/direct/AndroidManifestFirebase.xml")
+        sourceSets.getByName("direct").manifest.srcFile("src/direct/firebaseManifest/AndroidManifest.xml")
         sourceSets.getByName("play").manifest.srcFile("src/firebase/AndroidManifest.xml")
     }
     buildFeatures { buildConfig = true; resValues = true }

@@ -56,3 +56,8 @@ def test_qr_scanner_is_private_and_camera_is_optional():
   assert features["android.hardware.camera.autofocus"] == "false"
   activity = next(node for node in root.iter("activity") if node.get(ANDROID + "name") == "com.journeyapps.barcodescanner.CaptureActivity")
   assert activity.get(ANDROID + "exported") == "false"
+def test_maps_listener_is_bound_only_by_android():
+  root = ET.parse(MANIFEST).getroot()
+  service = next(node for node in root.iter("service") if node.get(ANDROID + "name") == ".NavigationNotificationListener")
+  assert service.get(ANDROID + "permission") == "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+  assert {node.get(ANDROID + "name") for node in service.iter("action")} == {"android.service.notification.NotificationListenerService"}

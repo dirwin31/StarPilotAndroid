@@ -636,9 +636,19 @@ class MainActivity : Activity() {
                         .setPositiveButton("Done", null).show()
                 }
             }
-            .group("Phone GPS") {
-                if (PhoneGpsService.enabled(prefs)) action("Stop sharing phone GPS") { setPhoneGps(false) }
-                else action("Share phone GPS with StarPilot", "StarPilot uses it for navigation when its own GPS has no fix") { setPhoneGps(true) }
+            .group("Phone sharing") {
+                if (PhoneGpsService.enabled(prefs)) action("Stop sharing phone location") { setPhoneGps(false) }
+                else action("Share phone location with StarPilot", "Uses location permission and your StarPilot GPS source preference") { setPhoneGps(true) }
+                val forwarding = NavigationNotificationListener.enabled(this@MainActivity)
+                val access = NavigationNotificationListener.hasAccess(this@MainActivity)
+                action(if (forwarding) "Stop sharing navigation" else "Share navigation with StarPilot",
+                    if (forwarding && !access) "Waiting for notification access · tap Notification access below"
+                    else "Uses notification access · Google Maps and explicit Waze text guidance · active Mapbox navigation takes priority") {
+                    setPhoneNavigation(!forwarding)
+                }
+                action("Notification access", if (access) "Granted · manage access for navigation sharing" else "Required to read supported navigation app notifications") {
+                    openNavigationNotificationAccess()
+                }
             }
             .group("Permissions") {
                 val permissions = listOf(
@@ -671,12 +681,39 @@ class MainActivity : Activity() {
                             }
                         }.show()
                 }
+                action("Notification details", "View detected navigation, forwarding and push status") { showNotificationDetails() }
                 action("Refresh Galaxy screens", GalaxyUpdates.store(this@MainActivity).status) {
                     GalaxyUpdates.checkAsync(this@MainActivity) { status -> runOnUiThread { message(status) } }
                 }
             }
             .show()
     }
+    private fun showNotificationDetails() {
+        fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+        fun details(): String {
+            val navigation = NavigationNotificationListener.diagnostics.details(
+                NavigationNotificationListener.enabled(this), NavigationNotificationListener.hasAccess(this))
+            return navigation + "\n\nPush notifications\nRegistered: ${prefs.getString("fcmRegisteredOrigin", "")}\n${prefs.getString("fcmAcknowledgement", "")}\nLast push: ${prefs.getLong("sentryLastPushAt", 0)}\nLast poll: ${prefs.getLong("sentryLastPollAt", 0)}"
+        }
+        val token = prefs.getString("fcmToken", "").orEmpty()
+        val body = TextView(this).apply { text = details(); setTextIsSelectable(true); setPadding(dp(24), dp(12), dp(24), dp(12)) }
+        val dialog = AlertDialog.Builder(this).setTitle("Notification details")
+            .setView(ScrollView(this).apply { addView(body) }).setPositiveButton("Close", null)
+            .setNegativeButton("Copy details") { _, _ ->
+                getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Notification details", details()))
+            }.apply {
+                if (token.isNotEmpty()) setNeutralButton("Copy push token") { _, _ ->
+                    getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Push token", token))
+                }
+            }.create()
+        val refresh = object : Runnable {
+            override fun run() { if (dialog.isShowing) { body.text = details(); handler.postDelayed(this, 1000) } }
+        }
+        dialog.setOnDismissListener { handler.removeCallbacks(refresh) }
+        dialog.show()
+        handler.post(refresh)
+    }
+
     private fun appSettings() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
     }
@@ -987,7 +1024,7 @@ class MainActivity : Activity() {
             return
         }
         scanningRemoteKey = true
-        IntentIntegrator(this).setRequestCode(QR_SCAN).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+        IntentIntegrator(this).setCaptureActivity(QrCaptureActivity::class.java).setRequestCode(QR_SCAN).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
             .setPrompt("Scan the App key QR code in StarPilot → Galaxy → Access")
             .setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(false).initiateScan()
     }
@@ -1543,9 +1580,32 @@ class MainActivity : Activity() {
     }
     /** Pairing results appear on the connect screen when it is showing, otherwise in a dialog over Galaxy. */
     private fun phoneGpsPermissions(): Array<String> = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+    private fun openNavigationNotificationAccess() {
+        runCatching { startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+            .onFailure { message("Could not open notification access settings. Open Android Settings and allow Galaxy notification access to share navigation.") }
+    }
+    private fun setPhoneNavigation(enabled: Boolean) {
+        val navigationPrefs = NavigationNotificationListener.preferences(this)
+        if (enabled && !navigationPrefs.getBoolean("disclosureAccepted", false)) {
+            AlertDialog.Builder(this).setTitle("Share navigation with StarPilot")
+                .setMessage("Galaxy reads notifications from supported navigation apps and sends available instructions, turns and distances to your paired StarPilot over local Wi-Fi or Bluetooth. Supported: Google Maps and explicit English Waze text notifications. Icon-only and unsupported formats are ignored. Android grants notification access broadly; Galaxy processes only registered navigation apps while sharing is enabled. Active Mapbox navigation takes priority. Available notification guidance appears on the turn card without a Mapbox route or key. Missing information stays unknown; phone notifications do not control the car. Enable Use phone navigation in StarPilot's Navigation setup too.")
+                .setPositiveButton("Continue") { _, _ -> navigationPrefs.edit().putBoolean("disclosureAccepted", true).apply(); setPhoneNavigation(true) }
+                .setNegativeButton("Cancel", null).show()
+            return
+        }
+        navigationPrefs.edit().putBoolean("enabled", enabled).apply()
+        runCatching { NavigationNotificationListener.refresh(this) }.onFailure {
+            message("Could not reconnect the navigation listener. Check Galaxy notification access in Android settings.")
+        }
+        if (enabled && !NavigationNotificationListener.hasAccess(this)) {
+            message("Navigation sharing is waiting for notification access. Allow Galaxy in Android settings; if access is denied, use Notification access under Phone sharing to retry.")
+            openNavigationNotificationAccess()
+        } else message(if (enabled) "Navigation sharing enabled. Connect to StarPilot and enable Use phone navigation there. Notification details shows detection and delivery status."
+            else "Navigation sharing stopped.")
+    }
     private fun setPhoneGps(enabled: Boolean) {
         if (enabled && !prefs.getBoolean("gpsDisclosureAccepted", false)) {
-            AlertDialog.Builder(this).setTitle("Phone GPS").setMessage("Galaxy sends this phone's location to your StarPilot device to improve navigation while driving. Location is only used while the Phone GPS notification is showing.")
+            AlertDialog.Builder(this).setTitle("Share phone location").setMessage("Galaxy sends this phone's location to your StarPilot device to improve navigation while driving. Location is only used while the phone location sharing notification is showing.")
                 .setPositiveButton("Continue") { _, _ -> prefs.edit().putBoolean("gpsDisclosureAccepted", true).apply(); setPhoneGps(true) }
                 .setNegativeButton("Cancel", null).show()
             return
@@ -1555,7 +1615,7 @@ class MainActivity : Activity() {
         if (missing.isNotEmpty()) { requestFeaturePermissions(missing.toTypedArray(), 4, "Precise location"); return }
         prefs.edit().putBoolean("phoneGps", true).apply()
         startForegroundService(Intent(this, PhoneGpsService::class.java))
-        message("Sharing phone GPS. Keep this app's notification while driving; StarPilot uses it only when its own GPS has no fix.")
+        message("Sharing phone location. Keep this app's notification while driving; StarPilot uses your GPS source preference.")
     }
     private fun pairingNotice(text: String, paired: Boolean) {
         val s = screen ?: return message(text)

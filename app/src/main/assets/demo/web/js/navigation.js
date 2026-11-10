@@ -507,9 +507,9 @@ export const NavigationPage = {
           </div>
           <div v-if="gpsGuide === 'android'">
             <ol><li>Open the StarPilot companion app and connect to your comma over Bluetooth or Galaxy Wi-Fi.</li>
-              <li>Open Connections → Phone GPS → <strong>Share phone GPS with comma</strong>.</li>
+              <li>Open Connections → Phone sharing → <strong>Share phone location with StarPilot</strong>.</li>
               <li>Allow precise location. Keep the app’s GPS-sharing notification active while driving.</li></ol>
-            <p>To stop, open Connections and select <strong>Stop sharing phone GPS</strong>.</p>
+            <p>To stop, open Connections and select <strong>Stop sharing phone location</strong>.</p>
           </div>
           <div v-else>
             <ol><li>Open the StarPilot iPhone companion app and connect to your comma over Bluetooth or Wi-Fi.</li>

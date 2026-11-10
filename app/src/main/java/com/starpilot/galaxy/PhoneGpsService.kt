@@ -14,9 +14,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.Base64
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -30,9 +27,7 @@ class PhoneGpsService : Service(), LocationListener {
     @Volatile private var latest: Location? = null
     @Volatile private var stopped = false
     private var sent = 0L
-    private var cookie = ""
-    private var lastBluetoothAttempt = 0L
-    private var own: BleTransport? = null
+    private val sender by lazy { LocalCompanionSender(this) }
     private var status = ""
 
     override fun onCreate() {
@@ -65,7 +60,7 @@ class PhoneGpsService : Service(), LocationListener {
         val location = latest ?: return update("Waiting for GPS")
         if (location.elapsedRealtimeNanos == sent) return
         try {
-            sent = send()
+            sent = sender.post(PhoneGps.PATH, latestBody = ::latestBody)
             update("Sharing GPS with StarPilot")
         } catch (_: Exception) { update("Waiting for StarPilot or a fresh GPS fix") }
     }
@@ -80,62 +75,6 @@ class PhoneGpsService : Service(), LocationListener {
             location.bearing.takeIf { location.hasBearing() }, location.bearingAccuracyDegrees.takeIf { location.hasBearingAccuracy() }), age)
             ?: error("Waiting for fresh GPS")
         return location.elapsedRealtimeNanos to JSONObject(payload).toString().toByteArray()
-    }
-    private fun send(): Long {
-        val ble = BleTransport.active?.takeIf { it.open }
-        if (ble == null) Networks.wifi(this)?.let { return post(it.first) }
-        try {
-            val transport = ble ?: bluetooth() ?: error("StarPilot unavailable")
-            // request() uses the same monitor; no other request can queue between
-            // dating the latest fix and starting its Bluetooth transmission.
-            return synchronized(transport) {
-                val (stamp, body) = latestBody()
-                val response = transport.request(JSONObject().put("method", "POST").put("path", PhoneGps.PATH)
-                    .put("headers", JSONObject().put("content-type", "application/json")).put("body", Base64.getEncoder().encodeToString(body)))
-                require(response.getInt("status") == 200)
-                stamp
-            }
-        } catch (error: Exception) {
-            // A failed Bluetooth delivery must not block an available local link.
-            Networks.wifi(this)?.let { return post(it.first) }
-            throw error
-        }
-    }
-    /** Opens Bluetooth only when no other part of the app holds or is opening the connection. */
-    private fun bluetooth(): BleTransport? {
-        val now = SystemClock.elapsedRealtime()
-        if (BleTransport.active != null || BleTransport.busy || now - lastBluetoothAttempt < 15_000) return null
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return null
-        if (getSystemService(android.bluetooth.BluetoothManager::class.java).adapter?.isEnabled != true) return null
-        lastBluetoothAttempt = now
-        val pairing = PairingStore(this)
-        val key = pairing.load() ?: return null
-        val address = pairing.deviceAddress() ?: return null
-        val transport = BleTransport(this, key)
-        return try { transport.connect(address); own = transport; transport } catch (_: Exception) { transport.close(); null }
-    }
-    private fun post(network: android.net.Network): Long {
-        for (attempt in 0..1) {
-            if (cookie.isEmpty()) cookie = open(network, "/api/auth/session").run {
-                try { getHeaderField("Set-Cookie")?.substringBefore(';') ?: "" } finally { disconnect() }
-            }
-            val connection = open(network, PhoneGps.PATH)
-            try {
-                connection.requestMethod = "POST"; connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
-                val (stamp, body) = latestBody()
-                connection.outputStream.use { it.write(body) }
-                if (connection.responseCode == 200) return stamp
-                if (connection.responseCode != 401) error("Galaxy rejected the location")
-            } finally { connection.disconnect() }
-            cookie = ""
-        }
-        error("Galaxy session unavailable")
-    }
-    private fun open(network: android.net.Network, path: String) = (network.openConnection(URL(Networks.ORIGIN + path)) as HttpURLConnection).apply {
-        connectTimeout = 2000; readTimeout = 2000; instanceFollowRedirects = false
-        setRequestProperty("Origin", Networks.ORIGIN)
-        if (cookie.isNotEmpty()) setRequestProperty("Cookie", cookie)
     }
     private fun notification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -154,7 +93,7 @@ class PhoneGpsService : Service(), LocationListener {
         stopped = true
         executor.shutdownNow()
         getSystemService(LocationManager::class.java).removeUpdates(this)
-        own?.close()
+        sender.close()
         super.onDestroy()
     }
 }
