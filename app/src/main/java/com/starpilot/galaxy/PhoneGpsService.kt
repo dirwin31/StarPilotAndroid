@@ -17,10 +17,12 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-/** Sends this phone's GPS to comma about once a second, over Bluetooth or Galaxy Wi-Fi. */
+/** Sends each new phone GPS fix to comma as it arrives, over Bluetooth or Galaxy Wi-Fi. */
 class PhoneGpsService : Service(), LocationListener {
     companion object {
         fun enabled(prefs: android.content.SharedPreferences) = prefs.getBoolean("phoneGps", false)
+        // Receivers that support it report at 2 Hz; most phones still give 1 Hz.
+        const val FIX_INTERVAL_MS = 500L
     }
     private val prefs by lazy { getSharedPreferences("companion", MODE_PRIVATE) }
     private val executor = Executors.newSingleThreadScheduledExecutor()
@@ -37,11 +39,12 @@ class PhoneGpsService : Service(), LocationListener {
         try {
             if (Build.VERSION.SDK_INT >= 29) startForeground(Notifications.PHONE_GPS, first, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) else startForeground(Notifications.PHONE_GPS, first)
             if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) throw SecurityException("Location permission")
-            getSystemService(LocationManager::class.java).requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper())
+            getSystemService(LocationManager::class.java).requestLocationUpdates(LocationManager.GPS_PROVIDER, FIX_INTERVAL_MS, 0f, this, Looper.getMainLooper())
         } catch (_: Exception) {
             // Android refuses location in the background after the permission is withdrawn.
             prefs.edit().putBoolean("phoneGps", false).apply(); stopped = true; stopSelf(); return
         }
+        // Fixes are sent as they arrive; this tick only retries and refreshes the status.
         executor.scheduleWithFixedDelay({ tick() }, 1, 1, TimeUnit.SECONDS)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -50,7 +53,11 @@ class PhoneGpsService : Service(), LocationListener {
         }
         return START_STICKY
     }
-    override fun onLocationChanged(location: Location) { latest = location }
+    override fun onLocationChanged(location: Location) {
+        latest = location
+        // Waiting for the next tick added up to a second (0.5 s on average) to every fix.
+        if (!stopped) executor.execute { tick() }
+    }
     @Deprecated("Required before Android 10") override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     override fun onProviderEnabled(provider: String) {}
     override fun onProviderDisabled(provider: String) {}
