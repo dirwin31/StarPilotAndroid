@@ -1,6 +1,7 @@
 package com.starpilot.galaxy
 
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Person
 import android.content.Context
@@ -10,6 +11,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONObject
 
 /** Forwards newly posted message notifications to the comma's StarPort toast.
@@ -22,7 +24,24 @@ internal class PhoneNotificationForwarder(private val service: NotificationListe
         const val DISCLOSURE = "notificationsDisclosureAccepted"
         private const val BACKOFF_MS = 60_000L
         internal val diagnostics = PhoneNotificationDiagnostics { SystemClock.elapsedRealtime() }
+        const val TEST_EXTRA = "com.starpilot.galaxy.NOTIFICATION_TEST"
+        const val TEST_TITLE = "StarPilot test notification"
+        private const val TEST_CHANNEL = "notification-test"
+        private val testId = AtomicInteger(0)
         fun enabled(context: Context) = NavigationNotificationListener.preferences(context).getBoolean(ENABLED, false)
+
+        /** Posts a real notification that the listener forwards like any other, so it checks the whole path. */
+        fun postTest(context: Context): Boolean {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            if (!manager.areNotificationsEnabled()) return false
+            manager.createNotificationChannel(NotificationChannel(TEST_CHANNEL, "Notification sharing test", NotificationManager.IMPORTANCE_DEFAULT))
+            // A new id each tap, so the repeat filter never drops a second test.
+            val id = Notifications.NOTIFICATION_TEST_BASE + testId.getAndIncrement() % 100
+            manager.notify(id, Notification.Builder(context, TEST_CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(TEST_TITLE).setContentText("If sharing works, this shows on your comma and car screen.")
+                .addExtras(Bundle().apply { putBoolean(TEST_EXTRA, true) }).setAutoCancel(true).setTimeoutAfter(15_000).build())
+            return true
+        }
     }
     private val queue = PhoneNotificationQueue()
     private val dedupe = PhoneNotificationDedupe()
@@ -37,7 +56,8 @@ internal class PhoneNotificationForwarder(private val service: NotificationListe
     fun posted(sbn: StatusBarNotification, rankingMap: NotificationListenerService.RankingMap?): Boolean {
         if (unsupported || !enabled(service)) return false
         val notification = sbn.notification ?: return false
-        if (sbn.packageName == service.packageName || (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0 || sbn.isOngoing ||
+        val test = sbn.packageName == service.packageName && notification.extras?.getBoolean(TEST_EXTRA) == true
+        if ((sbn.packageName == service.packageName && !test) || (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0 || sbn.isOngoing ||
             (notification.flags and Notification.FLAG_FOREGROUND_SERVICE) != 0 || (notification.category ?: "") in PhoneNotificationExtractor.SKIPPED_CATEGORIES) return false
         val extras = notification.extras ?: return false
         val media = runCatching {

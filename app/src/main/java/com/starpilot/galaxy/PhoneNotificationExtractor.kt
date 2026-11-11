@@ -113,6 +113,6 @@ internal class PhoneNotificationDiagnostics(private val clock: () -> Long) {
         append("Phone notifications\nEnabled: $enabled\nNotification access: $access\n")
         append("Last forwarded: $age\nLast result: $result\n")
         append("Counts: ${if (counts.isEmpty()) "none" else counts.entries.joinToString(" · ") { "${it.key} ${it.value}" }}\n")
-        append("Message content is never stored or logged. Choose apps in Galaxy → StarPort → Phone notifications.\n")
+        append("Message content is never stored or logged. Choose apps in Galaxy → Toggles → Phone.\n")
     }
 }

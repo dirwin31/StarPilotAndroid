@@ -10,6 +10,7 @@ object Notifications {
     const val SHARED_PLACE = 8
     const val DEMO_CHANNEL = "demo"
     const val SENTRY_BASE = 1000
+    const val NOTIFICATION_TEST_BASE = 2000
     const val UPLINK_CHANNEL = "uplink"
     const val GPS_CHANNEL = "phone-gps"
     const val UPDATE_CHANNEL = "app_updates"

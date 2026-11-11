@@ -649,8 +649,11 @@ class MainActivity : Activity() {
                 val notifications = PhoneNotificationForwarder.enabled(this@MainActivity)
                 action(if (notifications) "Stop sharing notifications" else "Share notifications with StarPilot",
                     if (notifications && !access) "Waiting for notification access · tap Notification access below"
-                    else "Shows message notifications briefly on the car screen · choose apps in Galaxy → StarPort") {
+                    else "Shows message notifications briefly on the car screen · choose apps in Galaxy → Toggles → Phone") {
                     setPhoneNotifications(!notifications)
+                }
+                if (notifications) action("Send test notification", "Posts a test here; it should show at the top of the comma and car screens") {
+                    sendTestNotification(access)
                 }
                 action("Notification access", if (access) "Granted · manage access for navigation and notification sharing" else "Required to read navigation and message notifications") {
                     openNavigationNotificationAccess()
@@ -1620,7 +1623,7 @@ class MainActivity : Activity() {
             AlertDialog.Builder(this).setTitle("Share notifications with StarPilot")
                 .setMessage("While this is on, Galaxy reads the notifications your other apps post on this phone. For each new notification it sends the app name, the sender and the message text to your paired StarPilot over local Wi-Fi or Bluetooth, so StarPilot can show it briefly on the car screen.\n\n" +
                     "Message content is not saved on this phone or on StarPilot, and nothing is sent anywhere else: no servers, no remote connection. StarPilot remembers only which apps have sent notifications, so you can choose them.\n\n" +
-                    "Choose which apps appear in Galaxy → StarPort → Phone notifications on StarPilot. Only messaging apps appear until you allow others.\n\n" +
+                    "Choose which apps appear in Galaxy → Toggles → Phone on StarPilot. Only messaging apps appear until you allow others.\n\n" +
                     "To turn it off, tap Stop sharing notifications under Phone sharing, or remove Galaxy's notification access in Android settings.")
                 .setPositiveButton("Continue") { _, _ -> navigationPrefs.edit().putBoolean(PhoneNotificationForwarder.DISCLOSURE, true).apply(); setPhoneNotifications(true) }
                 .setNegativeButton("Cancel", null).show()
@@ -1633,8 +1636,17 @@ class MainActivity : Activity() {
         if (enabled && !NavigationNotificationListener.hasAccess(this)) {
             message("Notification sharing is waiting for notification access. Allow Galaxy in Android settings; if access is denied, use Notification access under Phone sharing to retry.")
             openNavigationNotificationAccess()
-        } else message(if (enabled) "Notification sharing enabled. Choose apps in Galaxy → StarPort → Phone notifications on StarPilot. Notification details shows delivery status."
+        } else message(if (enabled) "Notification sharing enabled. Choose apps in Galaxy → Toggles → Phone on StarPilot. Notification details shows delivery status."
             else "Notification sharing stopped.")
+    }
+    private fun sendTestNotification(access: Boolean) {
+        if (!access) { message("Allow Galaxy notification access first, so it can share the test."); openNavigationNotificationAccess(); return }
+        if (!PhoneNotificationForwarder.postTest(this)) {
+            if (Build.VERSION.SDK_INT >= 33) requestFeaturePermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 8, "Notifications")
+            else message("Allow notifications for Galaxy in Android settings so it can post a test.")
+            return
+        }
+        message("Test sent. Look at the top of the comma screen or car screen. If nothing shows within a few seconds, open Notification details for the delivery status, and check that Show phone notifications is on in Galaxy → Toggles → Phone.")
     }
     private fun setPhoneGps(enabled: Boolean) {
         if (enabled && !prefs.getBoolean("gpsDisclosureAccepted", false)) {
