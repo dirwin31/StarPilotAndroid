@@ -11,7 +11,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Base64
 
-/** Authenticated, local-only posts shared by GPS and navigation. Worker threads only. */
+/** A non-200 reply from a reachable comma; anything else means it was unreachable. */
+internal class CompanionHttpException(val status: Int) : IllegalStateException("Galaxy rejected request (HTTP $status)")
+
+/** Authenticated, local-only posts shared by GPS, navigation and notifications. Worker threads only. */
 internal class LocalCompanionSender(private val context: Context) : Closeable {
     private var cookie = ""
     private var cookieOrigin = ""
@@ -32,7 +35,7 @@ internal class LocalCompanionSender(private val context: Context) : Closeable {
                     .put("headers", JSONObject().put("content-type", "application/json"))
                     .put("body", Base64.getEncoder().encodeToString(body)), deadlineSeconds)
                 val status = response.getInt("status")
-                require(status == 200) { "Galaxy rejected request (HTTP $status)" }
+                if (status != 200) throw CompanionHttpException(status)
                 onResponse?.invoke("Bluetooth", JSONObject(String(Base64.getDecoder().decode(response.getString("body")), Charsets.UTF_8)))
                 stamp
             }
@@ -83,7 +86,7 @@ internal class LocalCompanionSender(private val context: Context) : Closeable {
                     }
                     return stamp
                 }
-                if (connection.responseCode != 401) error("Galaxy rejected request (HTTP ${connection.responseCode})")
+                if (connection.responseCode != 401) throw CompanionHttpException(connection.responseCode)
             } finally { connection.disconnect() }
             cookie = ""
         }

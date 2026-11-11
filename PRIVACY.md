@@ -2,7 +2,7 @@
 
 Galaxy (the StarPilot Galaxy app, package `com.starpilot.galaxy`) is a companion app for a comma device running StarPilot. This policy explains what the app does with your information.
 
-_Last updated: 2026-11-05_
+_Last updated: 2026-11-10_
 
 ## The short version
 
@@ -17,6 +17,13 @@ _Last updated: 2026-11-05_
 **Location (optional).** If you turn on phone GPS sharing, Galaxy sends your phone's precise location to your own comma device while sharing is on. It runs as a foreground service with a visible notification. Location is not sent to us. Bluetooth scanning is declared as never used to derive location.
 
 **Shared places.** When you share a place from a maps app to Galaxy, Galaxy sends the shared text (the place's name, address and link) to your comma to start the route, over the same connections. Google Maps short links are opened on your phone, only on Google's servers, to read the full link. When the link has no coordinates, the comma looks the place up with the map provider you set up, Mapbox or Google. If your comma is not reachable, the shared text stays on your phone for up to 12 hours and is sent when your phone next connects to the comma; sharing a new place replaces it. A notification shows the result if notifications are allowed.
+
+**Notification access (optional).** Galaxy uses Android notification access only for the two sharing features below, each off until you turn it on in **Phone sharing**. Android grants this access to all notifications; Galaxy does not cancel notifications or use their actions. Notifications are processed on your phone, and anything sent goes only to your own paired StarPilot over local Wi-Fi or Bluetooth, never over the Remote route and never to us or any other server.
+
+- **Navigation sharing.** Galaxy reads ongoing notifications from Google Maps and Waze and sends the next instruction, turn, distance, road and exit, and the remaining trip time and distance when shown, so StarPilot can display them. Other apps' notifications are ignored by this feature.
+- **Notification sharing.** While on, Galaxy reads new notifications from your other apps and, for each one, sends the app's package name and label, the sender, the message text (up to 500 characters) and a category (message, call, email, social or other) so StarPilot can show it briefly on the car screen. You choose which apps appear in Galaxy → StarPort → Phone notifications on StarPilot; only messaging apps appear by default. Galaxy does not save message content, write it to logs, or include it in support reports; messages waiting for a connection are held in memory for at most 8 seconds. StarPilot keeps the message only in temporary memory while it is shown, and remembers only the names of apps that have sent notifications so you can choose them.
+
+You can turn either feature off in **Phone sharing**, or remove Galaxy's notification access in Android settings.
 
 **Notifications (optional).** If you enable Sentry alerts, Galaxy registers a push token (Firebase Cloud Messaging) so your comma can notify your phone. The token and alert events pass through Firebase and a small push relay that forwards them and keeps no data. Without Firebase, alerts use polling while the app is connected.
 

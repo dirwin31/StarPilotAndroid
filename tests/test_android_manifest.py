@@ -61,3 +61,5 @@ def test_maps_listener_is_bound_only_by_android():
   service = next(node for node in root.iter("service") if node.get(ANDROID + "name") == ".NavigationNotificationListener")
   assert service.get(ANDROID + "permission") == "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
   assert {node.get(ANDROID + "name") for node in service.iter("action")} == {"android.service.notification.NotificationListenerService"}
+  # Keeping the class name preserves existing notification-access grants; the label names both features.
+  assert service.get(ANDROID + "label") == "Navigation and notification sharing"

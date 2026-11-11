@@ -3,13 +3,13 @@ package com.starpilot.galaxy
 /** App-specific parsing consumes text only; lifecycle and transports never depend on the app. */
 internal data class NavigationNotificationText(
     val title: String = "", val text: String = "", val bigText: String = "",
-    val lines: List<String> = emptyList(), val viewFields: Map<String, String> = emptyMap(),
+    val lines: List<String> = emptyList(), val viewFields: Map<String, String> = emptyMap(), val subText: String = "",
 )
 
 internal data class NavigationGuidance(
     val instruction: String, val distanceMeters: Double?, val maneuverType: String = "",
     val modifier: String = "", val roadName: String? = null, val exitNumber: String? = null,
-    val destination: String? = null,
+    val destination: String? = null, val remainingMeters: Double? = null, val remainingSeconds: Long? = null,
 )
 
 internal interface NavigationNotificationParser {
@@ -40,6 +40,6 @@ internal class StandardNavigationNotificationParser(
     override val source: String, override val packageName: String,
 ) : NavigationNotificationParser {
     override fun parse(text: NavigationNotificationText): NavigationGuidance? =
-        NavigationTextParser.parse(text.title, text.text, text.bigText, text.lines)
+        NavigationTextParser.parse(text.title, text.text, text.bigText, text.lines, subText = text.subText)
             ?.takeIf { it.maneuverType.isNotEmpty() && it.distanceMeters != null }
 }

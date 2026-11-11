@@ -646,8 +646,18 @@ class MainActivity : Activity() {
                     else "Uses notification access · Google Maps and explicit Waze text guidance · active Mapbox navigation takes priority") {
                     setPhoneNavigation(!forwarding)
                 }
-                action("Notification access", if (access) "Granted · manage access for navigation sharing" else "Required to read supported navigation app notifications") {
+                val notifications = PhoneNotificationForwarder.enabled(this@MainActivity)
+                action(if (notifications) "Stop sharing notifications" else "Share notifications with StarPilot",
+                    if (notifications && !access) "Waiting for notification access · tap Notification access below"
+                    else "Shows message notifications briefly on the car screen · choose apps in Galaxy → StarPort") {
+                    setPhoneNotifications(!notifications)
+                }
+                action("Notification access", if (access) "Granted · manage access for navigation and notification sharing" else "Required to read navigation and message notifications") {
                     openNavigationNotificationAccess()
+                }
+                action("Battery optimization", "Some phones stop background sharing · set Galaxy to Unrestricted or Don't optimize") {
+                    runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                        .onFailure { appSettings() }
                 }
             }
             .group("Permissions") {
@@ -691,9 +701,10 @@ class MainActivity : Activity() {
     private fun showNotificationDetails() {
         fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
         fun details(): String {
-            val navigation = NavigationNotificationListener.diagnostics.details(
-                NavigationNotificationListener.enabled(this), NavigationNotificationListener.hasAccess(this))
-            return navigation + "\n\nPush notifications\nRegistered: ${prefs.getString("fcmRegisteredOrigin", "")}\n${prefs.getString("fcmAcknowledgement", "")}\nLast push: ${prefs.getLong("sentryLastPushAt", 0)}\nLast poll: ${prefs.getLong("sentryLastPollAt", 0)}"
+            val access = NavigationNotificationListener.hasAccess(this)
+            val navigation = NavigationNotificationListener.diagnostics.details(NavigationNotificationListener.enabled(this), access)
+            val phone = PhoneNotificationForwarder.diagnostics.details(PhoneNotificationForwarder.enabled(this), access)
+            return navigation + "\n\n" + phone + "\nPush notifications\nRegistered: ${prefs.getString("fcmRegisteredOrigin", "")}\n${prefs.getString("fcmAcknowledgement", "")}\nLast push: ${prefs.getLong("sentryLastPushAt", 0)}\nLast poll: ${prefs.getLong("sentryLastPollAt", 0)}"
         }
         val token = prefs.getString("fcmToken", "").orEmpty()
         val body = TextView(this).apply { text = details(); setTextIsSelectable(true); setPadding(dp(24), dp(12), dp(24), dp(12)) }
@@ -1602,6 +1613,28 @@ class MainActivity : Activity() {
             openNavigationNotificationAccess()
         } else message(if (enabled) "Navigation sharing enabled. Connect to StarPilot and enable Use phone navigation there. Notification details shows detection and delivery status."
             else "Navigation sharing stopped.")
+    }
+    private fun setPhoneNotifications(enabled: Boolean) {
+        val navigationPrefs = NavigationNotificationListener.preferences(this)
+        if (enabled && !navigationPrefs.getBoolean(PhoneNotificationForwarder.DISCLOSURE, false)) {
+            AlertDialog.Builder(this).setTitle("Share notifications with StarPilot")
+                .setMessage("While this is on, Galaxy reads the notifications your other apps post on this phone. For each new notification it sends the app name, the sender and the message text to your paired StarPilot over local Wi-Fi or Bluetooth, so StarPilot can show it briefly on the car screen.\n\n" +
+                    "Message content is not saved on this phone or on StarPilot, and nothing is sent anywhere else: no servers, no remote connection. StarPilot remembers only which apps have sent notifications, so you can choose them.\n\n" +
+                    "Choose which apps appear in Galaxy → StarPort → Phone notifications on StarPilot. Only messaging apps appear until you allow others.\n\n" +
+                    "To turn it off, tap Stop sharing notifications under Phone sharing, or remove Galaxy's notification access in Android settings.")
+                .setPositiveButton("Continue") { _, _ -> navigationPrefs.edit().putBoolean(PhoneNotificationForwarder.DISCLOSURE, true).apply(); setPhoneNotifications(true) }
+                .setNegativeButton("Cancel", null).show()
+            return
+        }
+        navigationPrefs.edit().putBoolean(PhoneNotificationForwarder.ENABLED, enabled).apply()
+        runCatching { NavigationNotificationListener.refresh(this) }.onFailure {
+            message("Could not reconnect the notification listener. Check Galaxy notification access in Android settings.")
+        }
+        if (enabled && !NavigationNotificationListener.hasAccess(this)) {
+            message("Notification sharing is waiting for notification access. Allow Galaxy in Android settings; if access is denied, use Notification access under Phone sharing to retry.")
+            openNavigationNotificationAccess()
+        } else message(if (enabled) "Notification sharing enabled. Choose apps in Galaxy → StarPort → Phone notifications on StarPilot. Notification details shows delivery status."
+            else "Notification sharing stopped.")
     }
     private fun setPhoneGps(enabled: Boolean) {
         if (enabled && !prefs.getBoolean("gpsDisclosureAccepted", false)) {

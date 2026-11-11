@@ -26,6 +26,20 @@ class NavigationDiagnosticsTest {
         assertTrue(diagnostics.details(true, true).contains("HTTP 404"))
         assertFalse(diagnostics.details(false, true).contains("Title: 200 m"))
     }
+    @Test fun showsTripTotalsAndLegacyFallback() {
+        val diagnostics = NavigationDiagnostics { 1000 }
+        diagnostics.listener(true)
+        diagnostics.detected("googleMaps", NavigationNotificationText("200 m", "Turn right", subText = "20 min · 12 km"),
+            NavigationGuidance("Turn right", 200.0, "turn", "right", remainingMeters = 12_000.0, remainingSeconds = 1200), 1000)
+        val text = diagnostics.details(true, true)
+        assertTrue(text.contains("Trip remaining: 12.0 km · 20 min"))
+        assertTrue(text.contains("Sub text: 20 min · 12 km"))
+        assertFalse(text.contains("Trip totals not sent"))
+        diagnostics.tripTotalsUnsupported()
+        assertTrue(diagnostics.details(true, true).contains("Trip totals not sent"))
+        diagnostics.detected("googleMaps", NavigationNotificationText("200 m"), NavigationGuidance("Main St", 200.0), 1000)
+        assertTrue(diagnostics.details(true, true).contains("Trip remaining: unknown"))
+    }
     @Test fun ignoredIncompleteNotificationsRemainVisibleForDebugging() {
         val diagnostics = NavigationDiagnostics { 1000 }
         diagnostics.listener(true)
