@@ -1,6 +1,6 @@
 package com.starpilot.galaxy
 
-/** Text-only parsing: unknown icons/directions remain unknown. No Maps private API. */
+/** Text parsing; icon-only turns are filled by NavigationIconMemory once learned. No Maps private API. */
 internal object GoogleMapsNotificationParser : NavigationNotificationParser {
     override val source = "googleMaps"
     override val packageName = "com.google.android.apps.maps"

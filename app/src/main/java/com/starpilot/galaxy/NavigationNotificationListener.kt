@@ -5,11 +5,15 @@ import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.Drawable
 import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.TextView
 import org.json.JSONObject
 import java.util.UUID
@@ -22,6 +26,7 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
         internal val diagnostics = NavigationDiagnostics { SystemClock.elapsedRealtime() }
         const val PATH = "/api/companion/navigation"
         private const val MAX_AGE_MS = 90_000L
+        private const val ICON_PX = 64
         fun preferences(context: Context) = context.getSharedPreferences("mapsNavigation", Context.MODE_PRIVATE)
         fun enabled(context: Context) = preferences(context).getBoolean("enabled", false)
         fun hasAccess(context: Context): Boolean {
@@ -46,6 +51,13 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
     private var sent = -1L
     private var lastSend = 0L
     private val sender by lazy { LocalCompanionSender(this) }
+    // Arrow shape fingerprints learned from notifications that also named the turn in text.
+    private val icons by lazy {
+        val prefs = getSharedPreferences("mapsNavigationIcons", Context.MODE_PRIVATE)
+        NavigationIconMemory(prefs.all.mapNotNull { (key, value) -> (value as? String)?.let { key to it } }.toMap()) { put, removed ->
+            prefs.edit().apply { put.forEach { (key, value) -> putString(key, value) }; removed.forEach { remove(it) } }.apply()
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -77,6 +89,9 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
         fun field(name: String) = runCatching { extras.getCharSequence(name)?.toString()?.take(500) }.getOrNull().orEmpty()
         // Only adapters that need custom text fields request view inspection.
         val viewFields = mutableMapOf<String, String>()
+        var image: Drawable? = null
+        var imageArea = 0
+        var imageName = ""
         if (parser.viewFields.isNotEmpty()) runCatching {
             val builder = Notification.Builder.recoverBuilder(this, sbn.notification)
             val view = builder.createBigContentView() ?: builder.createContentView()
@@ -87,6 +102,12 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
                     if (name in parser.viewFields)
                         viewFields[name!!] = node.text.toString().take(500)
                 }
+                // The largest image is the current maneuver arrow; "icon" is the app's small icon.
+                if (node is ImageView && node.visibility == View.VISIBLE) node.drawable?.let { drawable ->
+                    val name = if (node.id == View.NO_ID) "" else runCatching { node.resources.getResourceEntryName(node.id) }.getOrNull().orEmpty()
+                    val area = drawable.intrinsicWidth * drawable.intrinsicHeight
+                    if (name != "icon" && area > imageArea) { image = drawable; imageArea = area; imageName = name.ifEmpty { "image" } }
+                }
                 if (node is ViewGroup) for (i in 0 until minOf(node.childCount, 64)) visit(node.getChildAt(i), depth + 1)
             }
             visit(view.apply(this, null))
@@ -95,7 +116,11 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
             field(Notification.EXTRA_BIG_TEXT), runCatching {
                 extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.take(16)?.map { it.toString().take(500) }
             }.getOrNull().orEmpty(), viewFields)
-        val guidance = runCatching { parser.parse(text) }.getOrNull()
+        val large = runCatching { sbn.notification.getLargeIcon()?.loadDrawable(this) }.getOrNull()
+        val arrow = large ?: image
+        val hash = arrow?.let { runCatching { NavigationIconFingerprint.of(pixels(it), ICON_PX, ICON_PX) }.getOrNull() }
+        val (guidance, iconResult) = icons.resolve(parser.source, hash, runCatching { parser.parse(text) }.getOrNull())
+        diagnostics.icon(if (large != null) "large icon" else if (image != null) "view $imageName" else "none", hash, iconResult)
         synchronized(lock) {
             // An unrelated/older ongoing Maps notification must not replace
             // selected guidance. Incomplete updates of the selected key clear it.
@@ -166,6 +191,13 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
         } catch (failure: Exception) { diagnostics.failed(failure.message ?: failure.javaClass.simpleName) }
     }
     private var sentContent = ""
+    private fun pixels(drawable: Drawable): IntArray {
+        val copy = drawable.constantState?.newDrawable(resources)?.mutate() ?: drawable
+        val bitmap = Bitmap.createBitmap(ICON_PX, ICON_PX, Bitmap.Config.ARGB_8888)
+        copy.setBounds(0, 0, ICON_PX, ICON_PX)
+        copy.draw(Canvas(bitmap))
+        return IntArray(ICON_PX * ICON_PX).also { bitmap.getPixels(it, 0, ICON_PX, 0, 0, ICON_PX, ICON_PX); bitmap.recycle() }
+    }
     override fun onDestroy() {
         connected = false
         diagnostics.listener(false)

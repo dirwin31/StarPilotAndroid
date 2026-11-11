@@ -15,6 +15,9 @@ internal class NavigationDiagnostics(private val clock: () -> Long) {
     private var commaEnabled: Boolean? = null
     private var transport = ""
     private var delivery = "No navigation update sent"
+    private var iconOrigin = ""
+    private var iconHash: String? = null
+    private var iconResult = ""
 
     @Synchronized fun listener(value: Boolean) { connected = value }
     @Synchronized fun detected(provider: String, text: NavigationNotificationText, parsed: NavigationGuidance?, stamp: Long, selected: Boolean = true) {
@@ -24,6 +27,7 @@ internal class NavigationDiagnostics(private val clock: () -> Long) {
         source = provider; guidance = parsed; observedAt = stamp
         state = if (parsed == null) "Rerouting or incomplete notification; previous turn cleared" else "Navigation detected"
     }
+    @Synchronized fun icon(origin: String, hash: String?, result: String) { iconOrigin = origin; iconHash = hash; iconResult = result }
     @Synchronized fun cleared(reason: String) { guidance = null; state = reason }
     @Synchronized fun delivered(via: String, accepted: Boolean, forwardingEnabled: Boolean? = null) {
         transport = via; deliveredAt = clock(); commaEnabled = forwardingEnabled
@@ -55,6 +59,7 @@ internal class NavigationDiagnostics(private val clock: () -> Long) {
                 if (it.bigText.isNotBlank()) append("Expanded: ${it.bigText.take(500)}\n")
                 if (it.lines.isNotEmpty()) append("Lines: ${it.lines.take(6).joinToString(" | ").take(1000)}\n")
                 it.viewFields.forEach { (name, value) -> append("$name: ${value.take(500)}\n") }
+                append("Arrow icon: ${iconOrigin.ifEmpty { "none" }} ${iconHash?.take(16) ?: "no shape"} · $iconResult\n")
             }
         }
     }
