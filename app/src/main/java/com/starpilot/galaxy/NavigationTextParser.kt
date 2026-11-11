@@ -1,10 +1,11 @@
 package com.starpilot.galaxy
 
-/** Shared English notification text grammar; it never infers directions from icons. */
+/** Shared English notification text grammar; arrow icons are matched separately (NavigationIconMemory). */
 internal object NavigationTextParser {
     private val distance = Regex("""^\s*([0-9]+(?:[.,][0-9]+)?)\s*(km|m|mi|ft|yd)\b(?:\s*[-·•–—]\s*|\s+)?(.*)$""", RegexOption.IGNORE_CASE)
     private val summary = Regex("""\b(ETA|arrival|arrive at|remaining|hr|min)\b|\d{1,2}:\d{2}""", RegexOption.IGNORE_CASE)
     private val rerouting = Regex("""\b(rerouting|recalculating|finding (?:a |the )?(?:best )?route|searching for GPS|GPS signal lost|navigation (?:paused|ended))\b""", RegexOption.IGNORE_CASE)
+    private val maneuver = Regex("""\b(turn|keep|exit|ramp|fork|merge|roundabout|u-turn|continue|straight|head)\b""", RegexOption.IGNORE_CASE)
     private fun clean(value: String) = value.replace(Regex("""[\s\p{Zs}]+"""), " ").trim().take(500)
 
     fun parse(title: String, text: String, bigText: String = "", lines: List<String> = emptyList(),
@@ -24,10 +25,13 @@ internal object NavigationTextParser {
         }
         val trailing = match?.groupValues?.get(3).orEmpty()
         val candidates = listOf(viewDescription, trailing, if (match == null) title else "", text, bigText) + lines
-        val instruction = candidates.map(::clean).firstOrNull {
+        val usable = candidates.map(::clean).filter {
             it.isNotEmpty() && !summary.containsMatchIn(it) && distance.matchEntire(it) == null &&
-                (meters != null || Regex("""\b(turn|keep|exit|ramp|fork|merge|roundabout|u-turn|continue|straight|head)\b""", RegexOption.IGNORE_CASE).containsMatchIn(it))
-        } ?: return null
+                !it.startsWith("then ", ignoreCase = true) && (meters != null || maneuver.containsMatchIn(it))
+        }
+        // Maps may show the bare road in one field and the maneuver in another. Take
+        // the whole step from a field naming a maneuver, never a later "Then" step.
+        val instruction = usable.firstOrNull { maneuver.containsMatchIn(it) } ?: usable.firstOrNull() ?: return null
         val prefix = instruction.lowercase().substringBefore(" onto ").substringBefore(" toward ").substringBefore(" towards ")
         val lower = prefix.substringBefore(" on ")
         val side = Regex("""\b(left|right)\b""").find(lower)?.value

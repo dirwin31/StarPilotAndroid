@@ -59,6 +59,20 @@ class NavigationNotificationParserTest {
         assertEquals("", parser.parse("200 m · Left Bank Road", "10 min · 2 km · ETA 12:30")!!.modifier)
         assertNull(parser.parse("1,000 m", "Turn right onto Main St")!!.distanceMeters)
     }
+    @Test fun maneuverTextWinsOverBareRoadDescription() {
+        val nav = parser.parse("", "Turn right onto US-95 N", viewTitle = "0.5 mi", viewDescription = "US-95 N")!!
+        assertEquals("Turn right onto US-95 N", nav.instruction)
+        assertEquals("turn", nav.maneuverType)
+        assertEquals("right", nav.modifier)
+        assertEquals("US-95 N", nav.roadName)
+        assertEquals(804.672, nav.distanceMeters!!, .001)
+    }
+    @Test fun laterThenStepIsNotTheCurrentManeuver() {
+        val nav = parser.parse("0.5 mi", "US-95 N", lines = listOf("Then turn left onto Main St"))!!
+        assertEquals("US-95 N", nav.instruction)
+        assertEquals("", nav.maneuverType)
+        assertEquals("", nav.modifier)
+    }
     @Test fun knownModifiers() {
         assertEquals("sharpLeft", parser.parse("200 m", "Make a sharp left onto Main St")!!.modifier)
         assertEquals("slightRight", parser.parse("200 m", "Keep right at the fork")!!.modifier)
