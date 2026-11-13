@@ -59,7 +59,7 @@ internal class NavigationDiagnostics(private val clock: () -> Long) {
             if (totalsUnsupported) append("Trip totals not sent: this StarPilot version does not accept them\n")
             append("Last delivery: ${age(deliveredAt)}\nTransport: ${transport.ifEmpty { "none" }}\n$delivery\n")
             append("Comma phone-navigation setting: ${commaEnabled?.let { if (it) "On" else "Off — enable it in Galaxy Navigation Setup" } ?: "unknown"}\n")
-            append("Active Mapbox navigation takes priority. Phone guidance is display-only.\n")
+            append("Active Mapbox navigation takes priority. Turns the comma's map confirms can slow the car and assist a signalled turn.\n")
             if (enabled) raw?.let {
                 append("\nLast notification ($notificationSource) · $notificationResult\nTitle: ${it.title}\nText: ${it.text}\n")
                 if (it.bigText.isNotBlank()) append("Expanded: ${it.bigText.take(500)}\n")
