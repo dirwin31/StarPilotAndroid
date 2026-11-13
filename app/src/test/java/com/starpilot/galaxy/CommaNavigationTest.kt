@@ -96,4 +96,21 @@ class CommaNavigationTest {
     @Test fun quotesControlCharacters() {
         assertEquals("\"a\\u000ab\\u0001\\\\\"", CommaNavigation.quote("a\nb\u0001\\"))
     }
+    @Test fun sharesReuseTheSameIntentAcrossRevisionConflicts() {
+        val api = Fake(mutableListOf(State(200, "r1"), State(200, "r2")),
+            mutableListOf(State(409), State(200, "r3", sharedName = "Bellagio")))
+        CommaNavigation.share(api, link, "same-intent")
+        assertEquals(2, api.sent.size)
+        assertTrue(api.sent.all { it.contains("\"intentId\":\"same-intent\"") })
+        assertTrue(api.sent[1].contains("\"revision\":\"r2\""))
+    }
+
+    @Test fun retriesLegacyShareWithoutIntentBeforeUsingOldSelectFallback() {
+        val api = Fake(mutableListOf(State(200, "r1")), mutableListOf(
+            State(400, error = CommaNavigation.OLD_COMMA), State(200, "r2", sharedName = "Bellagio")))
+        assertEquals(CommaNavigation.Outcome.Started("Bellagio"), CommaNavigation.share(api, link, "new-intent"))
+        assertTrue(api.sent[0].contains("intentId"))
+        assertFalse(api.sent[1].contains("intentId"))
+        assertTrue(api.sent[1].contains("\"action\":\"share\""))
+    }
 }

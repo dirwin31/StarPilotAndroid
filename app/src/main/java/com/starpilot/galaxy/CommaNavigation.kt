@@ -22,6 +22,7 @@ object CommaNavigation {
     class Refused(message: String) : Exception(message)
     /** This route to comma needs a new sign-in. */
     class SignIn : IOException("Sign in to Galaxy again")
+    class Superseded : IOException("A newer destination replaced this share")
     sealed class Outcome {
         data class Started(val name: String) : Outcome()
         object NeedsSearch : Outcome()
@@ -30,11 +31,13 @@ object CommaNavigation {
     const val OLD_COMMA = "Invalid navigation action"
 
     /** comma finds the place in the shared text and starts the route; an older comma gets the place parsed here. */
-    fun share(api: Api, text: String): Outcome {
+    fun share(api: Api, text: String, intentId: String? = null): Outcome {
         try {
             var state = checked(api.status())
             repeat(2) {
-                val reply = api.action(shareRequest(state.revision, text))
+                var reply = api.action(shareRequest(state.revision, text, intentId))
+                if (intentId != null && reply.code == 400 && reply.error == OLD_COMMA)
+                    reply = api.action(shareRequest(state.revision, text))
                 when {
                     reply.code == 409 -> state = checked(api.status())
                     reply.code == 400 && reply.query -> return Outcome.NeedsSearch
@@ -74,7 +77,9 @@ object CommaNavigation {
         else -> throw IOException(state.error ?: "Galaxy returned HTTP ${state.code}")
     }
 
-    fun shareRequest(revision: String, text: String) = """{"action":"share","revision":${quote(revision)},"text":${quote(text.take(SharedDestination.MAX_TEXT))}}"""
+    fun shareRequest(revision: String, text: String, intentId: String? = null) =
+        """{"action":"share","revision":${quote(revision)},"text":${quote(text.take(SharedDestination.MAX_TEXT))}""" +
+            (intentId?.let { ",\"intentId\":" + quote(it) } ?: "") + "}"
     fun configure(revision: String) = """{"action":"configure","revision":${quote(revision)},"patch":{"enabled":true}}"""
     fun select(revision: String, place: SharedDestination.Place) = """{"action":"select","revision":${quote(revision)},"destination":""" +
         """{"name":${quote(place.name.trim().take(256).ifEmpty { "Shared destination" })},"latitude":${place.latitude},"longitude":${place.longitude}}}"""

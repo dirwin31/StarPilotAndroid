@@ -51,6 +51,8 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val lock = Any()
     private var sequence = 0L
+    private val order = NavigationObservationOrder()
+    private val transmitQueued = java.util.concurrent.atomic.AtomicBoolean()
     @Volatile private var key: String? = null
     private var selectedPostTime = 0L
     @Volatile private var connected = false
@@ -86,6 +88,10 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
     }
     private fun drain() { if (!destroyed) forwarder.drain(sender) }
     private fun drainSoon() { runCatching { worker.execute { runCatching { drain() } } } }
+    private fun transmitSoon() {
+        if (!destroyed && transmitQueued.compareAndSet(false, true))
+            runCatching { worker.execute { transmitQueued.set(false); runCatching { transmit() } } }.onFailure { transmitQueued.set(false) }
+    }
     override fun onListenerConnected() {
         connected = true
         diagnostics.listener(true)
@@ -106,8 +112,9 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val parser = parsers.forPackage(sbn.packageName) ?: return
         if (!enabled(this)) { clear("Forwarding disabled"); return }
+        if (!order.accepts(sbn.key, sbn.postTime) || sbn.key == key && sbn.postTime < selectedPostTime) return
         if (!sbn.isOngoing) {
-            if (sbn.key == key) { clear("Navigation notification ended"); scan(excludeKey = sbn.key) }
+            onNotificationRemoved(sbn)
             return
         }
         val age = System.currentTimeMillis() - sbn.postTime
@@ -162,9 +169,12 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
             key = sbn.key
             latest = Observation(++sequence, SystemClock.elapsedRealtime() - age, guidance, parser.source)
         }
+        transmitSoon()
     }
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        if (sbn.key == key) { clear("Navigation notification ended"); scan(excludeKey = sbn.key) }
+        if (parsers.forPackage(sbn.packageName) == null) return
+        order.removed(sbn.key, sbn.postTime, System.currentTimeMillis() - MAX_AGE_MS)
+        if (sbn.key == key && sbn.postTime >= selectedPostTime) { clear("Navigation notification ended"); scan(excludeKey = sbn.key) }
     }
     override fun onListenerDisconnected() { connected = false; diagnostics.listener(false); clear("Listener disconnected") }
     override fun onSharedPreferenceChanged(prefs: SharedPreferences, name: String?) {
@@ -179,6 +189,7 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
         key = null
         selectedPostTime = 0L
         latest = Observation(++sequence, SystemClock.elapsedRealtime(), null, latest.source)
+        transmitSoon()
     }
     private fun transmit() {
         if (destroyed) return
@@ -205,8 +216,9 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
             }) {
                 // Connections and Bluetooth locks can take time. Date the newest
                 // observation only when the selected transport is ready to send.
+                check(!destroyed)
                 val pending = latest
-                if (pending.guidance != null && (!enabled(this) || !hasAccess(this) ||
+                if (pending.guidance != null && (!connected || !enabled(this) || !hasAccess(this) ||
                     SystemClock.elapsedRealtime() - pending.stamp > MAX_AGE_MS)) clear(only = pending)
                 extended = false
                 val current = latest

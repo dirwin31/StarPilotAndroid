@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
 object PendingShare {
     private const val TEXT = "pendingShare"
     private const val TIME = "pendingShareTime"
+    private const val ID = "pendingShareId"
     private const val TTL = 12 * 60 * 60 * 1000L
     private const val CHANNEL = "shared_places"
     private val executor = Executors.newSingleThreadExecutor()
@@ -39,7 +40,7 @@ object PendingShare {
     private fun clear(context: Context, time: Long) = synchronized(this) {
         val prefs = prefs(context)
         if (prefs.getLong(TIME, -1) != time) return
-        prefs.edit().remove(TEXT).remove(TIME).apply()
+        prefs.edit().remove(TEXT).remove(TIME).remove(ID).apply()
         PendingShareJob.unwatch(context)
     }
 
@@ -48,7 +49,7 @@ object PendingShare {
         val app = context.applicationContext
         val time = synchronized(this) {
             val now = maxOf(System.currentTimeMillis(), prefs(app).getLong(TIME, 0) + 1)
-            prefs(app).edit().putString(TEXT, text).putLong(TIME, now).commit()
+            prefs(app).edit().putString(TEXT, text).putLong(TIME, now).putString(ID, java.util.UUID.randomUUID().toString()).commit()
             now
         }
         runCatching { PendingShareJob.watch(app) }
@@ -73,11 +74,20 @@ object PendingShare {
 
     /** A retry that still cannot reach comma stays silent; a new share nobody watched says it was saved. */
     private fun attempt(context: Context, text: String, time: Long, retry: Boolean, show: (CommaNavigation.Outcome?, String) -> Boolean) {
-        val outcome = try { CommaSender(context).share(text) } catch (error: Exception) {
+        val intentId = synchronized(this) {
+            if (prefs(context).getLong(TIME, -1) != time) return
+            prefs(context).getString(ID, null) ?: java.util.UUID.randomUUID().toString().also {
+                prefs(context).edit().putString(ID, it).commit()
+            }
+        }
+        val current = { prefs(context).getLong(TIME, -1) == time && prefs(context).getString(ID, null) == intentId }
+        val outcome = try { CommaSender(context, current).share(text, intentId) } catch (error: Exception) {
+            if (error is CommaNavigation.Superseded || !current()) return
             val reason = error.message ?: CommaSender.UNREACHABLE
             if (!show(null, reason) && !retry) notify(context, null, text)
             return
         }
+        if (!current()) return
         clear(context, time)
         if (!show(outcome, "")) notify(context, outcome, text)
     }

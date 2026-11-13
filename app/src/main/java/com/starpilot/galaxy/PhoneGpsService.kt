@@ -16,6 +16,7 @@ import android.os.SystemClock
 import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Sends each new phone GPS fix to comma as it arrives, over Bluetooth or Galaxy Wi-Fi. */
 class PhoneGpsService : Service(), LocationListener {
@@ -26,7 +27,9 @@ class PhoneGpsService : Service(), LocationListener {
     }
     private val prefs by lazy { getSharedPreferences("companion", MODE_PRIVATE) }
     private val executor = Executors.newSingleThreadScheduledExecutor()
-    @Volatile private var latest: Location? = null
+    private val stream = PhoneGpsStream()
+    private val tickQueued = AtomicBoolean()
+    private var legacyPayload = false
     @Volatile private var stopped = false
     private var sent = 0L
     private val sender by lazy { LocalCompanionSender(this) }
@@ -49,14 +52,19 @@ class PhoneGpsService : Service(), LocationListener {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "stop" || !enabled(prefs)) {
+            stopped = true
             prefs.edit().putBoolean("phoneGps", false).apply(); stopSelf(); return START_NOT_STICKY
         }
         return START_STICKY
     }
     override fun onLocationChanged(location: Location) {
-        latest = location
-        // Waiting for the next tick added up to a second (0.5 s on average) to every fix.
-        if (!stopped) executor.execute { tick() }
+        if (stopped) return
+        val fix = PhoneGps.Fix(location.latitude, location.longitude, location.accuracy, location.time,
+            location.altitude.takeIf { location.hasAltitude() }, location.verticalAccuracyMeters.takeIf { location.hasVerticalAccuracy() },
+            location.speed.takeIf { location.hasSpeed() }, location.speedAccuracyMetersPerSecond.takeIf { location.hasSpeedAccuracy() },
+            location.bearing.takeIf { location.hasBearing() }, location.bearingAccuracyDegrees.takeIf { location.hasBearingAccuracy() })
+        if (stream.offer(fix, location.elapsedRealtimeNanos, SystemClock.elapsedRealtimeNanos()) && tickQueued.compareAndSet(false, true))
+            runCatching { executor.execute { tickQueued.set(false); tick() } }.onFailure { tickQueued.set(false) }
     }
     @Deprecated("Required before Android 10") override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     override fun onProviderEnabled(provider: String) {}
@@ -64,24 +72,27 @@ class PhoneGpsService : Service(), LocationListener {
 
     private fun tick() {
         if (stopped) return
-        val location = latest ?: return update("Waiting for GPS")
-        if (location.elapsedRealtimeNanos == sent) return
+        if (stream.sequence() == 0L) return update("Waiting for GPS")
+        if (stream.payload(SystemClock.elapsedRealtimeNanos()) == null) return update("Waiting for a fresh GPS fix")
+        if (stream.sequence() == sent) return
         try {
-            sent = sender.post(PhoneGps.PATH, latestBody = ::latestBody)
-            update("Sharing GPS with StarPilot")
-        } catch (_: Exception) { update("Waiting for StarPilot or a fresh GPS fix") }
+            var accepted = false
+            sent = sender.post(PhoneGps.PATH, deadlineSeconds = 5, timingProbe = !legacyPayload,
+                onResponse = { _, reply -> accepted = reply.optBoolean("accepted", true) }, latestBody = ::latestBody)
+            update(if (accepted) "Sharing GPS with StarPilot" else "Waiting for StarPilot or a fresh GPS fix")
+        } catch (failure: Exception) {
+            if (failure is CompanionHttpException && failure.status == 400 && !legacyPayload) {
+                legacyPayload = true
+                return tick()
+            }
+            update("Waiting for StarPilot or a fresh GPS fix")
+        }
     }
-    // Build from the newest measurement after waiting for a connection/transport lock.
-    private fun latestBody(): Pair<Long, ByteArray> {
+    private fun latestBody(serverMonoTimeNs: Long?): Pair<Long, ByteArray> {
         check(!stopped)
-        val location = latest ?: error("Waiting for GPS")
-        val age = (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000
-        val payload = PhoneGps.payload(PhoneGps.Fix(location.latitude, location.longitude, location.accuracy, location.time,
-            location.altitude.takeIf { location.hasAltitude() }, location.verticalAccuracyMeters.takeIf { location.hasVerticalAccuracy() },
-            location.speed.takeIf { location.hasSpeed() }, location.speedAccuracyMetersPerSecond.takeIf { location.hasSpeedAccuracy() },
-            location.bearing.takeIf { location.hasBearing() }, location.bearingAccuracyDegrees.takeIf { location.hasBearingAccuracy() }), age)
+        val (sequence, payload) = stream.payload(SystemClock.elapsedRealtimeNanos(), !legacyPayload, serverMonoTimeNs)
             ?: error("Waiting for fresh GPS")
-        return location.elapsedRealtimeNanos to JSONObject(payload).toString().toByteArray()
+        return sequence to JSONObject(payload).toString().toByteArray()
     }
     private fun notification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -98,9 +109,9 @@ class PhoneGpsService : Service(), LocationListener {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() {
         stopped = true
-        executor.shutdownNow()
         getSystemService(LocationManager::class.java).removeUpdates(this)
-        sender.close()
+        runCatching { executor.execute { sender.close() } }
+        executor.shutdown()
         super.onDestroy()
     }
 }

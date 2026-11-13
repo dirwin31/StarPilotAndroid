@@ -12,31 +12,34 @@ import java.net.URL
 import java.util.Base64
 
 /** Sends a shared place to comma over whatever reaches it: open Bluetooth, comma's Wi-Fi or LAN, the Remote route, then a new Bluetooth link. */
-class CommaSender(context: Context) {
+class CommaSender(context: Context, private val current: () -> Boolean = { true }) {
     private val context = context.applicationContext
     private val prefs = this.context.getSharedPreferences("companion", Context.MODE_PRIVATE)
 
     /** Returns comma's answer from the first route that reaches it; throws [IOException] with the reason when none does. */
-    fun share(text: String): CommaNavigation.Outcome {
+    fun share(text: String, intentId: String? = null): CommaNavigation.Outcome {
         var reason: String? = null
-        val routes = listOf<() -> CommaNavigation.Api?>({ BleTransport.active?.takeIf { it.open }?.let(::BluetoothApi) }, ::lan, ::tunnel, ::bluetooth)
+        val routes = listOf<() -> CommaNavigation.Api?>({ BleTransport.active?.takeIf { it.open }?.let { BluetoothApi(it, current = current) } }, ::lan, ::tunnel, ::bluetooth)
         for (route in routes) {
+            ensureCurrent(current)
             val api = try { route() } catch (_: Exception) { null } ?: continue
             try {
-                return CommaNavigation.share(api, text)
+                ensureCurrent(current)
+                return CommaNavigation.share(api, text, intentId)
             } catch (error: Exception) {
+                if (error is CommaNavigation.Superseded) throw error
                 if (api is HttpApi && api.tunnel && error is CommaNavigation.SignIn) reason = "Pair the Remote route again"
             } finally { (api as? BluetoothApi)?.takeIf { it.own }?.transport?.close() }
         }
         throw IOException(reason ?: UNREACHABLE)
     }
 
-    private fun lan(): CommaNavigation.Api? = Networks.commaLan(context)?.let { (network, origin) -> HttpApi(network, origin, origin, false) }
+    private fun lan(): CommaNavigation.Api? = Networks.commaLan(context)?.let { (network, origin) -> HttpApi(network, origin, origin, false, current = current) }
 
     private fun tunnel(): CommaNavigation.Api? {
         val credential = TunnelStore(context).load() ?: return null
         val network = Networks.internet(context) ?: return null
-        return HttpApi(network, credential.webUrl.trimEnd('/'), TUNNEL_ORIGIN, true, "galaxy_session=${credential.sessionToken}")
+        return HttpApi(network, credential.webUrl.trimEnd('/'), TUNNEL_ORIGIN, true, "galaxy_session=${credential.sessionToken}", current)
     }
 
     private fun bluetooth(): CommaNavigation.Api? {
@@ -48,21 +51,24 @@ class CommaSender(context: Context) {
         val key = pairing.load() ?: return null
         val address = pairing.deviceAddress() ?: return null
         val transport = BleTransport(context, key)
-        return try { transport.connect(address); BluetoothApi(transport, own = true) } catch (_: Exception) { transport.close(); null }
+        return try { transport.connect(address); BluetoothApi(transport, own = true, current = current) } catch (_: Exception) { transport.close(); null }
     }
 
-    private class BluetoothApi(val transport: BleTransport, val own: Boolean = false) : CommaNavigation.Api {
+    private class BluetoothApi(val transport: BleTransport, val own: Boolean = false, val current: () -> Boolean) : CommaNavigation.Api {
         override fun status() = call("GET", CommaNavigation.STATUS, "")
         override fun action(body: String) = call("POST", CommaNavigation.ACTION, body)
         private fun call(method: String, path: String, body: String): CommaNavigation.State {
-            val reply = transport.request(JSONObject().put("method", method).put("path", path)
-                .put("headers", JSONObject().put("content-type", "application/json"))
-                .put("body", Base64.getEncoder().encodeToString(body.toByteArray())), 30)
+            val reply = synchronized(transport) {
+                ensureCurrent(current)
+                transport.request(JSONObject().put("method", method).put("path", path)
+                    .put("headers", JSONObject().put("content-type", "application/json"))
+                    .put("body", Base64.getEncoder().encodeToString(body.toByteArray())), 30)
+            }
             return state(reply.getInt("status"), String(Base64.getDecoder().decode(reply.optString("body"))))
         }
     }
 
-    private class HttpApi(val network: Network, val base: String, val origin: String, val tunnel: Boolean, var cookie: String = "") : CommaNavigation.Api {
+    private class HttpApi(val network: Network, val base: String, val origin: String, val tunnel: Boolean, var cookie: String = "", val current: () -> Boolean) : CommaNavigation.Api {
         override fun status() = call("GET", CommaNavigation.STATUS, null)
         override fun action(body: String) = call("POST", CommaNavigation.ACTION, body)
         private fun call(method: String, path: String, body: String?): CommaNavigation.State {
@@ -78,6 +84,8 @@ class CommaSender(context: Context) {
                         connection.readTimeout = 30000
                         connection.doOutput = true
                         connection.setRequestProperty("Content-Type", "application/json")
+                        connection.connect()
+                        ensureCurrent(current)
                         connection.outputStream.use { it.write(body.toByteArray()) }
                     }
                     val code = connection.responseCode
@@ -105,6 +113,7 @@ class CommaSender(context: Context) {
     }
 
     companion object {
+        private fun ensureCurrent(current: () -> Boolean) { if (!current()) throw CommaNavigation.Superseded() }
         const val UNREACHABLE = "StarPilot is not reachable"
         private const val MAX_BODY = 1024 * 1024
         private const val TUNNEL_ORIGIN = "https://galaxy.firestar.link"

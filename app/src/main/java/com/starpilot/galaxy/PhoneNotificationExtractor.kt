@@ -12,7 +12,7 @@ internal object PhoneNotificationExtractor {
     data class Message(val sender: String?, val text: String, val time: Long = 0)
     data class Fields(val sender: String, val text: String, val category: String, val identity: String)
     val SKIPPED_CATEGORIES = setOf("transport", "progress", "service", "sys", "status", "navigation", "stopwatch", "location_sharing", "workout")
-    private val control = Regex("""[\p{Cc}‎‏‪-‮⁦-⁩]+""")
+    private val control = Regex("""[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]+""")
     private val space = Regex("""\s+""")
 
     fun clean(value: CharSequence?, limit: Int): String {
