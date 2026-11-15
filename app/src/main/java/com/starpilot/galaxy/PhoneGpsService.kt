@@ -24,6 +24,32 @@ class PhoneGpsService : Service(), LocationListener {
         fun enabled(prefs: android.content.SharedPreferences) = prefs.getBoolean("phoneGps", false)
         // Receivers that support it report at 2 Hz; most phones still give 1 Hz.
         const val FIX_INTERVAL_MS = 500L
+        private const val NO_FIX_MS = 45_000L
+        private const val RESUME_EVERY_MS = 600_000L
+        private val duty = PhoneGpsDuty()
+        @Volatile private var running = false
+        @Volatile private var resumeAskedAt = -RESUME_EVERY_MS
+        /** StarPilot may be near; the receiver turns on for a while to find out. */
+        fun wake() = duty.wake(SystemClock.elapsedRealtime())
+        /** Android only gives location to sharing started from the open app, so ask for one tap. */
+        fun askToResume(context: android.content.Context) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - resumeAskedAt < RESUME_EVERY_MS) return
+            resumeAskedAt = now
+            val manager = context.getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(NotificationChannel(Notifications.GPS_RESUME_CHANNEL, "Resume phone GPS", NotificationManager.IMPORTANCE_DEFAULT))
+            val open = PendingIntent.getActivity(context, 2, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            runCatching {
+                manager.notify(Notifications.PHONE_GPS_RESUME, Notification.Builder(context, Notifications.GPS_RESUME_CHANNEL)
+                    .setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Phone GPS sharing is paused")
+                    .setContentText("Tap to share this phone's GPS with StarPilot").setContentIntent(open).setAutoCancel(true).build())
+            }
+        }
+        /** Maps began navigating: wake the receiver, or ask for a tap when sharing is on but not running. */
+        fun navigating(context: android.content.Context) {
+            if (!enabled(context.getSharedPreferences("companion", android.content.Context.MODE_PRIVATE))) return
+            if (running) wake() else askToResume(context)
+        }
     }
     private val prefs by lazy { getSharedPreferences("companion", MODE_PRIVATE) }
     private val executor = Executors.newSingleThreadScheduledExecutor()
@@ -34,6 +60,15 @@ class PhoneGpsService : Service(), LocationListener {
     private var sent = 0L
     private val sender by lazy { LocalCompanionSender(this) }
     private var status = ""
+    private var listening = false
+    private var listeningSince = 0L
+    @Volatile private var fixAt = 0L
+    private val nearby = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) { wake() }
+    }
+    private val network = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) { wake() }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -42,23 +77,45 @@ class PhoneGpsService : Service(), LocationListener {
         try {
             if (Build.VERSION.SDK_INT >= 29) startForeground(Notifications.PHONE_GPS, first, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) else startForeground(Notifications.PHONE_GPS, first)
             if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) throw SecurityException("Location permission")
-            getSystemService(LocationManager::class.java).requestLocationUpdates(LocationManager.GPS_PROVIDER, FIX_INTERVAL_MS, 0f, this, Looper.getMainLooper())
         } catch (_: Exception) {
             // Android refuses location in the background after the permission is withdrawn.
             prefs.edit().putBoolean("phoneGps", false).apply(); stopped = true; stopSelf(); return
         }
-        // Fixes are sent as they arrive; this tick only retries and refreshes the status.
-        executor.scheduleWithFixedDelay({ tick() }, 1, 1, TimeUnit.SECONDS)
+        running = true
+        wake()
+        runCatching {
+            val filter = android.content.IntentFilter(android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED)
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(nearby, filter, RECEIVER_EXPORTED) else registerReceiver(nearby, filter)
+        }
+        runCatching { Networks.manager(this).registerDefaultNetworkCallback(network) }
+        // Fixes are sent as they arrive; this tick switches the receiver, retries and refreshes the status.
+        executor.scheduleWithFixedDelay({ runCatching { tick() } }, 1, 1, TimeUnit.SECONDS)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "stop" || !enabled(prefs)) {
             stopped = true
             prefs.edit().putBoolean("phoneGps", false).apply(); stopSelf(); return START_NOT_STICKY
         }
+        getSystemService(NotificationManager::class.java).cancel(Notifications.PHONE_GPS_RESUME)
+        wake()
         return START_STICKY
+    }
+    /** Worker only. The receiver runs only while StarPilot is near and driving. */
+    private fun listen(on: Boolean) {
+        val manager = getSystemService(LocationManager::class.java)
+        if (on) {
+            try {
+                manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, FIX_INTERVAL_MS, 0f, this, Looper.getMainLooper())
+            } catch (_: Exception) {
+                prefs.edit().putBoolean("phoneGps", false).apply(); stopped = true; stopSelf(); return
+            }
+            listeningSince = SystemClock.elapsedRealtime()
+        } else runCatching { manager.removeUpdates(this) }
+        listening = on
     }
     override fun onLocationChanged(location: Location) {
         if (stopped) return
+        fixAt = SystemClock.elapsedRealtime()
         val fix = PhoneGps.Fix(location.latitude, location.longitude, location.accuracy, location.time,
             location.altitude.takeIf { location.hasAltitude() }, location.verticalAccuracyMeters.takeIf { location.hasVerticalAccuracy() },
             location.speed.takeIf { location.hasSpeed() }, location.speedAccuracyMetersPerSecond.takeIf { location.hasSpeedAccuracy() },
@@ -72,13 +129,26 @@ class PhoneGpsService : Service(), LocationListener {
 
     private fun tick() {
         if (stopped) return
+        val now = SystemClock.elapsedRealtime()
+        val wanted = duty.wanted(now, BleTransport.active?.open == true || Networks.commaLan(this) != null)
+        if (wanted != listening) listen(wanted)
+        if (stopped) return
+        if (!listening) return update("Waiting for StarPilot")
+        if (now - listeningSince > NO_FIX_MS && fixAt < listeningSince) {
+            // A service Android restarted on its own gets no location until the app is opened again.
+            askToResume(this)
+            return update("Open Galaxy to resume GPS sharing")
+        }
         if (stream.sequence() == 0L) return update("Waiting for GPS")
         if (stream.payload(SystemClock.elapsedRealtimeNanos()) == null) return update("Waiting for a fresh GPS fix")
         if (stream.sequence() == sent) return
         try {
             var accepted = false
+            var driving = true
             sent = sender.post(PhoneGps.PATH, deadlineSeconds = 5, timingProbe = !legacyPayload,
-                onResponse = { _, reply -> accepted = reply.optBoolean("accepted", true) }, latestBody = ::latestBody)
+                onResponse = { _, reply -> accepted = reply.optBoolean("accepted", true); driving = reply.optBoolean("driving", true) },
+                latestBody = ::latestBody)
+            duty.answered(SystemClock.elapsedRealtime(), driving)
             update(if (accepted) "Sharing GPS with StarPilot" else "Waiting for StarPilot or a fresh GPS fix")
         } catch (failure: Exception) {
             if (failure is CompanionHttpException && failure.status == 400 && !legacyPayload) {
@@ -109,6 +179,9 @@ class PhoneGpsService : Service(), LocationListener {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() {
         stopped = true
+        running = false
+        runCatching { unregisterReceiver(nearby) }
+        runCatching { Networks.manager(this).unregisterNetworkCallback(network) }
         getSystemService(LocationManager::class.java).removeUpdates(this)
         runCatching { executor.execute { sender.close() } }
         executor.shutdown()

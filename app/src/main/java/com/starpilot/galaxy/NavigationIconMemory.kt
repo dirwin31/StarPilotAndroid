@@ -44,6 +44,17 @@ internal object NavigationIconFingerprint {
         }
     }
 
+    /** The same shape flipped left to right, or null for a malformed fingerprint. */
+    fun mirror(hash: String): String? {
+        if (hash.length != GRID * GRID / 4 || hash.any { it.digitToIntOrNull(16) == null }) return null
+        return hash.chunked(GRID / 4).joinToString("") { row ->
+            val bits = row.toInt(16)
+            var flipped = 0
+            for (i in 0 until GRID) if (((bits shr i) and 1) == 1) flipped = flipped or (1 shl (GRID - 1 - i))
+            flipped.toString(16).padStart(GRID / 4, '0')
+        }
+    }
+
     fun distance(a: String, b: String): Int =
         if (a.length != b.length) Int.MAX_VALUE
         else a.indices.sumOf { Integer.bitCount(a[it].digitToInt(16) xor b[it].digitToInt(16)) }
@@ -60,6 +71,11 @@ internal class NavigationIconMemory(
         const val MATCH_BITS = 20
         const val CAPACITY = 96
         private const val CONFLICT = "?"
+        // A label taken from the mirrored arrow rather than from text; a text label always replaces it.
+        private const val INFERRED = "|~"
+        private val MIRRORED_TYPES = setOf("turn", "fork", "on ramp", "off ramp")
+        private val MIRRORED = mapOf("left" to "right", "slightLeft" to "slightRight", "sharpLeft" to "sharpRight")
+            .let { it + it.entries.associate { (key, value) -> value to key } }
         // Mirrors openpilot/starpilot/navigation/phone.py TYPES/MODIFIERS; anything else is rejected there.
         val TYPES = setOf("turn", "continue", "on ramp", "off ramp", "fork", "merge", "roundabout")
         val MODIFIERS = setOf("left", "right", "straight", "slightLeft", "slightRight", "sharpLeft", "sharpRight", "uturn")
@@ -68,7 +84,7 @@ internal class NavigationIconMemory(
         initial.forEach { (key, value) -> if (value == CONFLICT || label(value) != null) put(key, value) }
     }
 
-    private fun label(value: String) = value.split('|').takeIf { it.size == 2 && it[0] in TYPES && it[1] in MODIFIERS }
+    private fun label(value: String) = value.removeSuffix(INFERRED).split('|').takeIf { it.size == 2 && it[0] in TYPES && it[1] in MODIFIERS }
 
     /** Returns guidance (text maneuver, or a learned one when text has none) and a diagnostic. */
     fun resolve(source: String, hash: String?, guidance: NavigationGuidance?): Pair<NavigationGuidance?, String> {
@@ -79,16 +95,27 @@ internal class NavigationIconMemory(
             if (guidance.maneuverType !in TYPES || guidance.modifier !in MODIFIERS) return guidance to "text maneuver; not learned"
             val value = guidance.maneuverType + "|" + guidance.modifier
             val old = table[key]
-            val stored = if (old == null || old == value) value else CONFLICT
+            val stored = if (old == null || old == value || old.endsWith(INFERRED)) value else CONFLICT
             table.remove(key)
             table[key] = stored
-            val evicted = if (table.size > CAPACITY) table.keys.first().also { table.remove(it) } else null
-            if (old != stored || evicted != null) persist(mapOf(key to stored), listOfNotNull(evicted))
+            val put = mutableMapOf<String, String>()
+            if (old != stored) put[key] = stored
+            // Left and right arrows are mirror images, so one named turn also teaches the opposite arrow.
+            val opposite = MIRRORED[guidance.modifier]?.takeIf { stored != CONFLICT && guidance.maneuverType in MIRRORED_TYPES }
+            val flipped = opposite?.let { NavigationIconFingerprint.mirror(hash) }
+                ?.takeIf { NavigationIconFingerprint.distance(it, hash) > MATCH_BITS * 2 }?.let { "$source:$it" }
+            if (flipped != null && table[flipped] == null) {
+                table[flipped] = guidance.maneuverType + "|" + opposite + INFERRED
+                put[flipped] = table.getValue(flipped)
+            }
+            val evicted = mutableListOf<String>()
+            while (table.size > CAPACITY) table.keys.first().also { table.remove(it); put.remove(it); evicted.add(it) }
+            if (put.isNotEmpty() || evicted.isNotEmpty()) persist(put, evicted)
             return guidance to if (stored == CONFLICT) "conflicting labels; arrow ignored" else "learned $value"
         }
         val prefix = "$source:"
         val near = table.filter { (k, _) -> k.startsWith(prefix) && NavigationIconFingerprint.distance(k.substring(prefix.length), hash) <= MATCH_BITS }
-        val values = near.values.toSet()
+        val values = near.values.map { it.removeSuffix(INFERRED) }.toSet()
         if (values.isEmpty()) return guidance to "unlearned arrow"
         val parts = values.singleOrNull()?.let(::label) ?: return guidance to "ambiguous arrow"
         return guidance.copy(maneuverType = parts[0], modifier = parts[1]) to "matched ${parts[0]}|${parts[1]}"

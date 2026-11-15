@@ -69,6 +69,35 @@ class NavigationIconMemoryTest {
         assertEquals(road to "no arrow icon", memory.resolve("googleMaps", null, road))
     }
 
+    @Test fun aNamedTurnAlsoTeachesTheMirroredArrow() {
+        val saved = mutableMapOf<String, String>()
+        val memory = NavigationIconMemory { put, removed -> saved.putAll(put); removed.forEach(saved::remove) }
+        val leftArrow = NavigationIconFingerprint.of(arrow(48, false), 48, 48)!!
+        val rightArrow = NavigationIconFingerprint.of(arrow(96, true), 96, 96)!!
+        assertTrue(NavigationIconFingerprint.distance(NavigationIconFingerprint.mirror(leftArrow)!!, rightArrow) <= NavigationIconMemory.MATCH_BITS)
+        assertEquals(leftArrow, NavigationIconFingerprint.mirror(NavigationIconFingerprint.mirror(leftArrow)!!))
+        assertNull(NavigationIconFingerprint.mirror("abc"))
+        memory.resolve("googleMaps", leftArrow, left)
+        assertEquals("matched turn|right", memory.resolve("googleMaps", rightArrow, road).second)
+        assertEquals("matched turn|left", memory.resolve("googleMaps", leftArrow, road).second)
+        assertEquals("matched turn|right", NavigationIconMemory(saved).resolve("googleMaps", rightArrow, road).second)
+        // Text naming the mirrored arrow differently replaces the guess instead of conflicting with it.
+        val mirrored = NavigationIconFingerprint.mirror(leftArrow)!!
+        assertEquals("learned fork|slightRight",
+            memory.resolve("googleMaps", mirrored, NavigationGuidance("Keep right", 300.0, "fork", "slightRight")).second)
+        assertEquals("matched fork|slightRight", memory.resolve("googleMaps", mirrored, road).second)
+        assertEquals("matched turn|left", memory.resolve("googleMaps", leftArrow, road).second)
+    }
+
+    @Test fun symmetricOrSidelessArrowsTeachNothingElse() {
+        val saved = mutableMapOf<String, String>()
+        val memory = NavigationIconMemory { put, _ -> saved.putAll(put) }
+        val hash = NavigationIconFingerprint.of(arrow(48, false), 48, 48)!!
+        memory.resolve("googleMaps", hash, NavigationGuidance("Make a U-turn", 100.0, "turn", "uturn"))
+        memory.resolve("googleMaps", "0".repeat(60) + "0180", left)
+        assertEquals(2, saved.size)
+    }
+
     @Test fun tableIsBounded() {
         val removed = mutableListOf<String>()
         val memory = NavigationIconMemory { _, gone -> removed.addAll(gone) }

@@ -13,6 +13,7 @@ internal class NavigationDiagnostics(private val clock: () -> Long) {
     private var observedAt = -1L
     private var deliveredAt = -1L
     private var commaEnabled: Boolean? = null
+    private var commaVerdict: String? = null
     private var transport = ""
     private var delivery = "No navigation update sent"
     private var iconOrigin = ""
@@ -30,8 +31,8 @@ internal class NavigationDiagnostics(private val clock: () -> Long) {
     }
     @Synchronized fun icon(origin: String, hash: String?, result: String) { iconOrigin = origin; iconHash = hash; iconResult = result }
     @Synchronized fun cleared(reason: String) { guidance = null; state = reason }
-    @Synchronized fun delivered(via: String, accepted: Boolean, forwardingEnabled: Boolean? = null) {
-        transport = via; deliveredAt = clock(); commaEnabled = forwardingEnabled
+    @Synchronized fun delivered(via: String, accepted: Boolean, forwardingEnabled: Boolean? = null, verdict: String? = null) {
+        transport = via; deliveredAt = clock(); commaEnabled = forwardingEnabled; commaVerdict = verdict
         delivery = if (accepted) "Accepted by StarPilot" else "StarPilot ignored an older/session update"
     }
     @Synchronized fun failed(reason: String) { delivery = "Delivery failed: " + reason.take(180) }
@@ -59,6 +60,7 @@ internal class NavigationDiagnostics(private val clock: () -> Long) {
             if (totalsUnsupported) append("Trip totals not sent: this StarPilot version does not accept them\n")
             append("Last delivery: ${age(deliveredAt)}\nTransport: ${transport.ifEmpty { "none" }}\n$delivery\n")
             append("Comma phone-navigation setting: ${commaEnabled?.let { if (it) "On" else "Off — enable it in Galaxy Navigation Setup" } ?: "unknown"}\n")
+            if (guidance != null) commaVerdict?.let { append("StarPilot: $it\n") }
             append("Active Mapbox navigation takes priority. Turns the comma's map confirms can slow the car and assist a signalled turn.\n")
             if (enabled) raw?.let {
                 append("\nLast notification ($notificationSource) · $notificationResult\nTitle: ${it.title}\nText: ${it.text}\n")

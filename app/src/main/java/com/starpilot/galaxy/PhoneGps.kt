@@ -28,6 +28,26 @@ object PhoneGps {
     }
 }
 
+/** Decides when the GPS receiver runs, so sharing can stay on between drives without draining the battery. */
+internal class PhoneGpsDuty(private val holdMs: Long = 60_000, private val probeEveryMs: Long = 120_000) {
+    private var wokenAt: Long? = null
+    private var drivingAt: Long? = null
+    private var probedAt: Long? = null
+    private fun recent(now: Long, at: Long?, span: Long) = at != null && now - at in 0 until span
+    /** StarPilot may be near: the app opened, Bluetooth or Wi-Fi changed, or Maps began navigating. */
+    @Synchronized fun wake(now: Long) { wokenAt = now }
+    /** comma answered a fix; [driving] is false while it is parked. */
+    @Synchronized fun answered(now: Long, driving: Boolean) {
+        if (driving) drivingAt = now else { wokenAt = null; drivingAt = null; probedAt = now }
+    }
+    @Synchronized fun wanted(now: Long, linked: Boolean): Boolean {
+        if (recent(now, wokenAt, holdMs) || recent(now, drivingAt, holdMs)) return true
+        // Nothing announces the start of a drive, so a reachable comma is asked again now and then.
+        if (linked && !recent(now, probedAt, probeEveryMs)) { probedAt = now; wokenAt = now; return true }
+        return false
+    }
+}
+
 /** Keeps one measurement while a transport is busy; all timing uses the phone's monotonic clock. */
 internal class PhoneGpsStream(private val sessionId: String = java.util.UUID.randomUUID().toString()) {
     private data class Measurement(val sequence: Long, val elapsedNanos: Long, val fix: PhoneGps.Fix)

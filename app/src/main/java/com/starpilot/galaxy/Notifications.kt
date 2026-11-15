@@ -8,11 +8,13 @@ object Notifications {
     const val DEMO_UPLINK = 6
     const val DEMO_GPS = 7
     const val SHARED_PLACE = 8
+    const val PHONE_GPS_RESUME = 9
     const val DEMO_CHANNEL = "demo"
     const val SENTRY_BASE = 1000
     const val NOTIFICATION_TEST_BASE = 2000
     const val UPLINK_CHANNEL = "uplink"
     const val GPS_CHANNEL = "phone-gps"
+    const val GPS_RESUME_CHANNEL = "phone-gps-resume"
     const val UPDATE_CHANNEL = "app_updates"
     const val UPDATE_DONE_CHANNEL = "app_update_completed"
     const val SENTRY_CHANNEL = "sentry_alerts"

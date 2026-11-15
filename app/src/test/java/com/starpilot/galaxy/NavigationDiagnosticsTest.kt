@@ -26,6 +26,22 @@ class NavigationDiagnosticsTest {
         assertTrue(diagnostics.details(true, true).contains("HTTP 404"))
         assertFalse(diagnostics.details(false, true).contains("Title: 200 m"))
     }
+    @Test fun showsWhatTheCommaDoesWithTheGuidance() {
+        val diagnostics = NavigationDiagnostics { 1000 }
+        diagnostics.listener(true)
+        diagnostics.detected("googleMaps", NavigationNotificationText("200 m", "Main St"), NavigationGuidance("Main St", 200.0), 1000)
+        diagnostics.delivered("Bluetooth", true, true)
+        assertFalse(diagnostics.details(true, true).contains("StarPilot:"))
+        diagnostics.delivered("Bluetooth", true, true, NavigationVerdict.describe("notificationGuidance", "mapInferred", ""))
+        assertTrue(diagnostics.details(true, true).contains("StarPilot: Turn confirmed on the comma's map"))
+        assertEquals("Shown on the comma only: its map has no junctions here (noMapFrame)",
+            NavigationVerdict.describe("notificationGuidance", "mapUnavailable", "noMapFrame"))
+        assertEquals("Shown on the comma only: mapFuture", NavigationVerdict.describe("notificationGuidance", "mapFuture", ""))
+        assertTrue(NavigationVerdict.describe("routeConflict", "", "").contains("Differs from the comma's own route"))
+        assertEquals("Not used by the comma (staleObservation)", NavigationVerdict.describe("staleObservation", "", ""))
+        diagnostics.cleared("Navigation notification ended")
+        assertFalse(diagnostics.details(true, true).contains("StarPilot:"))
+    }
     @Test fun showsTripTotalsAndLegacyFallback() {
         val diagnostics = NavigationDiagnostics { 1000 }
         diagnostics.listener(true)

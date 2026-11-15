@@ -169,6 +169,7 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
             key = sbn.key
             latest = Observation(++sequence, SystemClock.elapsedRealtime() - age, guidance, parser.source)
         }
+        if (guidance != null) runCatching { PhoneGpsService.navigating(this) }
         transmitSoon()
     }
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
@@ -212,7 +213,10 @@ class NavigationNotificationListener : NotificationListenerService(), SharedPref
         try {
             val delivered = sender.post(PATH, deadlineSeconds = 10, onResponse = { transport, response ->
                 diagnostics.delivered(transport, response.optBoolean("accepted", true),
-                    if (response.has("forwardingEnabled")) response.optBoolean("forwardingEnabled") else null)
+                    if (response.has("forwardingEnabled")) response.optBoolean("forwardingEnabled") else null,
+                    response.optJSONObject("verdict")?.let {
+                        NavigationVerdict.describe(it.optString("reason"), it.optString("mapStatus"), it.optString("mapReason"))
+                    })
             }) {
                 // Connections and Bluetooth locks can take time. Date the newest
                 // observation only when the selected transport is ready to send.

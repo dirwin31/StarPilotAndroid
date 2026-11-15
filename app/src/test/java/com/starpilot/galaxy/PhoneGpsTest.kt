@@ -54,4 +54,26 @@ class PhoneGpsTest {
         assertFalse(stream.offer(fix.copy(latitude = Double.NaN), 1_500_000_000, 1_500_000_000))
         assertEquals(PhoneGps.payload(fix, 500), stream.payload(1_500_000_000, extended = false)!!.second)
     }
+
+    @Test fun receiverRunsOnlyWhileStarPilotIsNearAndDriving() {
+        val duty = PhoneGpsDuty(holdMs = 60_000, probeEveryMs = 120_000)
+        assertFalse(duty.wanted(0, linked = false))
+        // A sign StarPilot may be near turns the receiver on for a while, and each driving answer keeps it on.
+        duty.wake(1_000)
+        assertTrue(duty.wanted(60_999, linked = false))
+        assertFalse(duty.wanted(61_000, linked = false))
+        duty.answered(70_000, driving = true)
+        assertTrue(duty.wanted(129_999, linked = false))
+        assertFalse(duty.wanted(130_000, linked = false))
+        // A parked comma turns it off at once, even after a fresh wake.
+        duty.wake(200_000)
+        duty.answered(201_000, driving = false)
+        assertFalse(duty.wanted(202_000, linked = true))
+        // While it stays reachable it is asked again every two minutes, for one hold at most.
+        assertTrue(duty.wanted(321_000, linked = true))
+        assertTrue(duty.wanted(380_999, linked = true))
+        assertFalse(duty.wanted(381_000, linked = true))
+        assertFalse(duty.wanted(440_000, linked = false))
+        assertTrue(duty.wanted(441_000, linked = true))
+    }
 }
