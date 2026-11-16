@@ -129,8 +129,9 @@ class PhoneGpsService : Service(), LocationListener {
 
     private fun tick() {
         if (stopped) return
+        if (duty.checkDue(SystemClock.elapsedRealtime(), BleTransport.active?.linkActive == true || Networks.commaLan(this) != null)) checkStatus()
         val now = SystemClock.elapsedRealtime()
-        val wanted = duty.wanted(now, BleTransport.active?.open == true || Networks.commaLan(this) != null)
+        val wanted = duty.wanted(now)
         if (wanted != listening) listen(wanted)
         if (stopped) return
         if (!listening) return update("Waiting for StarPilot")
@@ -157,6 +158,13 @@ class PhoneGpsService : Service(), LocationListener {
             }
             update("Waiting for StarPilot or a fresh GPS fix")
         }
+    }
+    /** Asks comma whether a drive is on without the GPS receiver; also reconnects Bluetooth after a drop. */
+    private fun checkStatus() {
+        val reply = try { sender.get(PhoneGps.PATH, deadlineSeconds = 5) } catch (_: Exception) { return duty.unanswered(SystemClock.elapsedRealtime()) }
+        if (stopped) return
+        val now = SystemClock.elapsedRealtime()
+        if (reply.has("driving")) duty.answered(now, reply.optBoolean("driving", true)) else duty.statusUnsupported(now)
     }
     private fun latestBody(serverMonoTimeNs: Long?): Pair<Long, ByteArray> {
         check(!stopped)

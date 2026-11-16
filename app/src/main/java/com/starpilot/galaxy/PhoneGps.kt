@@ -28,23 +28,48 @@ object PhoneGps {
     }
 }
 
-/** Decides when the GPS receiver runs, so sharing can stay on between drives without draining the battery. */
-internal class PhoneGpsDuty(private val holdMs: Long = 60_000, private val probeEveryMs: Long = 120_000) {
+/** Decides when the GPS receiver runs and when to ask comma, without GPS, whether a drive started. */
+internal class PhoneGpsDuty(
+    private val holdMs: Long = 60_000,
+    private val checkEveryMs: Long = 10_000,
+    private val searchEveryMs: Long = 30_000,
+    private val idleSearchEveryMs: Long = 180_000,
+    private val searchForMs: Long = 1_800_000,
+    private val probeEveryMs: Long = 120_000,
+) {
     private var wokenAt: Long? = null
     private var drivingAt: Long? = null
+    private var answeredAt: Long? = null
+    private var checkedAt: Long? = null
+    private var unansweredAt: Long? = null
     private var probedAt: Long? = null
     private fun recent(now: Long, at: Long?, span: Long) = at != null && now - at in 0 until span
     /** StarPilot may be near: the app opened, Bluetooth or Wi-Fi changed, or Maps began navigating. */
-    @Synchronized fun wake(now: Long) { wokenAt = now }
-    /** comma answered a fix; [driving] is false while it is parked. */
+    @Synchronized fun wake(now: Long) { wokenAt = now; checkedAt = null; unansweredAt = null }
+    /** comma answered a fix or a status check; [driving] is false only while it is parked with the ignition off. */
     @Synchronized fun answered(now: Long, driving: Boolean) {
-        if (driving) drivingAt = now else { wokenAt = null; drivingAt = null; probedAt = now }
+        answeredAt = now; unansweredAt = null
+        if (driving) drivingAt = now else { wokenAt = null; drivingAt = null }
     }
-    @Synchronized fun wanted(now: Long, linked: Boolean): Boolean {
-        if (recent(now, wokenAt, holdMs) || recent(now, drivingAt, holdMs)) return true
-        // Nothing announces the start of a drive, so a reachable comma is asked again now and then.
-        if (linked && !recent(now, probedAt, probeEveryMs)) { probedAt = now; wokenAt = now; return true }
-        return false
+    /** Older StarPilot reports no drive state to a status check, so the receiver probes with a fix now and then. */
+    @Synchronized fun statusUnsupported(now: Long) {
+        answeredAt = now; unansweredAt = null
+        if (!recent(now, probedAt, probeEveryMs)) { probedAt = now; wokenAt = now }
+    }
+    @Synchronized fun wanted(now: Long) = recent(now, wokenAt, holdMs) || recent(now, drivingAt, holdMs)
+    /** A status check could not reach comma. */
+    @Synchronized fun unanswered(now: Long) { unansweredAt = now }
+    /** True when comma should be asked now. Checks that cannot reach comma back off once it has been away a while. */
+    @Synchronized fun checkDue(now: Long, linked: Boolean): Boolean {
+        val every = when {
+            // Any Wi-Fi counts as linked once a LAN host is saved, so only an answering comma keeps the fast check.
+            linked && unansweredAt == null -> checkEveryMs
+            recent(now, answeredAt, searchForMs) || recent(now, wokenAt, searchForMs) -> searchEveryMs
+            else -> idleSearchEveryMs
+        }
+        if (recent(now, answeredAt, every) || recent(now, checkedAt, every)) return false
+        checkedAt = now
+        return true
     }
 }
 

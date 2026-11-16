@@ -25,7 +25,7 @@ internal class LocalCompanionSender(private val context: Context) : Closeable {
     private var own: BleTransport? = null
 
     fun <T> post(path: String, deadlineSeconds: Long = 90, onResponse: ((String, JSONObject) -> Unit)? = null, timingProbe: Boolean = false, latestBody: (Long?) -> Pair<T, ByteArray>): T {
-        val ble = BleTransport.active?.takeIf { it.open }
+        val ble = BleTransport.active?.takeIf { it.linkActive }
         if (ble == null) Networks.commaLan(context)?.let {
             try { return postLocal(it.first, it.second, path, onResponse, timingProbe, latestBody) }
             catch (_: Exception) { /* A disappearing Wi-Fi link must not prevent Bluetooth reconnect. */ }
@@ -57,9 +57,30 @@ internal class LocalCompanionSender(private val context: Context) : Closeable {
             throw failure
         }
     }
+    /** A small authenticated GET, such as the GPS status check. */
+    fun get(path: String, deadlineSeconds: Long = 5): JSONObject {
+        val ble = BleTransport.active?.takeIf { it.linkActive }
+        val lan = Networks.commaLan(context)
+        if (ble == null && lan != null) {
+            try { return getLocal(lan.first, lan.second, path) } catch (_: Exception) { /* Fall through to Bluetooth. */ }
+        }
+        try {
+            val transport = ble ?: bluetooth() ?: error("StarPilot unavailable")
+            val response = synchronized(transport) {
+                transport.request(JSONObject().put("method", "GET").put("path", path).put("headers", JSONObject()).put("body", ""), deadlineSeconds)
+            }
+            val status = response.getInt("status")
+            if (status != 200) throw CompanionHttpException(status)
+            return JSONObject(String(Base64.getDecoder().decode(response.getString("body")), Charsets.UTF_8))
+        } catch (failure: Exception) {
+            if (ble != null && lan != null) return getLocal(lan.first, lan.second, path)
+            throw failure
+        }
+    }
     private fun bluetooth(): BleTransport? = synchronized(BleTransport.connectionLock) {
         val now = SystemClock.elapsedRealtime()
-        BleTransport.active?.takeIf { it.open }?.let { return it }
+        // A link Android dropped stays open until a request fails, so only a live link is reused.
+        BleTransport.active?.takeIf { it.linkActive }?.let { return it }
         if (BleTransport.busy || now - lastBluetoothAttempt < 15_000) return null
         if (Build.VERSION.SDK_INT >= 31 && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return null
         if (context.getSystemService(android.bluetooth.BluetoothManager::class.java).adapter?.isEnabled != true) return null
@@ -73,9 +94,7 @@ internal class LocalCompanionSender(private val context: Context) : Closeable {
     internal fun <T> postLocal(network: android.net.Network, origin: String, path: String, onResponse: ((String, JSONObject) -> Unit)?, timingProbe: Boolean, latestBody: (Long?) -> Pair<T, ByteArray>): T {
         if (cookieOrigin != origin) { cookie = ""; cookieOrigin = origin }
         for (attempt in 0..1) {
-            if (cookie.isEmpty()) cookie = open(network, origin, "/api/auth/session").run {
-                try { getHeaderField("Set-Cookie")?.substringBefore(';') ?: "" } finally { disconnect() }
-            }
+            if (cookie.isEmpty()) cookie = session(network, origin)
             val clockKey = network to origin
             val serverTime = if (timingProbe) calibratedTime(clockKey) {
                 val probe = open(network, origin, PhoneGps.PATH)
@@ -105,6 +124,23 @@ internal class LocalCompanionSender(private val context: Context) : Closeable {
             cookie = ""
         }
         error("Galaxy session unavailable")
+    }
+    private fun getLocal(network: android.net.Network, origin: String, path: String): JSONObject {
+        if (cookieOrigin != origin) { cookie = ""; cookieOrigin = origin }
+        for (attempt in 0..1) {
+            if (cookie.isEmpty()) cookie = session(network, origin)
+            val connection = open(network, origin, path)
+            try {
+                val status = connection.responseCode
+                if (status == 200) return readJson(connection)
+                if (status != 401) throw CompanionHttpException(status)
+            } finally { connection.disconnect() }
+            cookie = ""
+        }
+        error("Galaxy session unavailable")
+    }
+    private fun session(network: android.net.Network, origin: String) = open(network, origin, "/api/auth/session").run {
+        try { getHeaderField("Set-Cookie")?.substringBefore(';') ?: "" } finally { disconnect() }
     }
     private fun calibratedTime(key: Any, probe: () -> Long?): Long? {
         val now = SystemClock.elapsedRealtimeNanos()
