@@ -13,13 +13,15 @@ import java.net.Inet4Address
 import java.util.concurrent.Executor
 
 /** One bounded foreground search. All callbacks and state changes run on the main thread. */
-class LanDiscovery(context: Context, private val network: Network, private val timeoutMs: Long = 12000L,
+class LanDiscovery(context: Context, network: Network, private val timeoutMs: Long = 12000L,
                    private val complete: (List<String>, String?) -> Unit) {
     companion object {
         const val SERVICE = "_sp-galaxy._tcp."
         private const val SUCCESS_SETTLE_MS = 500L
     }
     private val nsd = context.getSystemService(NsdManager::class.java)
+    private val localSubnets = Networks.manager(context).getLinkProperties(network)?.linkAddresses
+        ?.filter { it.address is Inet4Address }.orEmpty()
     private val wifi = context.applicationContext.getSystemService(WifiManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
     private val executor = Executor { handler.post(it) }
@@ -57,7 +59,9 @@ class LanDiscovery(context: Context, private val network: Network, private val t
         try {
             // Older Android/OEM Wi-Fi stacks filter multicast without this lock.
             lock = wifi.createMulticastLock("GalaxyLAN").apply { setReferenceCounted(false); acquire() }
-            if (Build.VERSION.SDK_INT >= 33) nsd.discoverServices(SERVICE, NsdManager.PROTOCOL_DNS_SD, network, executor, listener)
+            // The hotspot's client interface is separate from the phone's Wi-Fi Network.
+            // Search all local interfaces so a tethered StarPilot can advertise itself too.
+            if (Build.VERSION.SDK_INT >= 33) nsd.discoverServices(SERVICE, NsdManager.PROTOCOL_DNS_SD, null, executor, listener)
             else nsd.discoverServices(SERVICE, NsdManager.PROTOCOL_DNS_SD, listener)
             discoveryRequested = true
             handler.postDelayed(timeout, timeoutMs)
@@ -81,8 +85,10 @@ class LanDiscovery(context: Context, private val network: Network, private val t
             override fun onServiceResolved(service: NsdServiceInfo) { handler.post {
                 if (active && resolving === this) {
                     val addresses = if (Build.VERSION.SDK_INT >= 34) service.hostAddresses else listOfNotNull(service.host)
-                    addresses.filterIsInstance<Inet4Address>().forEach { address ->
-                        Networks.localOrigin("http://${address.hostAddress}:${service.port}")?.let { hosts.add(it) }
+                    val address = addresses.filterIsInstance<Inet4Address>()
+                        .firstOrNull(::onLocalSubnet) ?: addresses.filterIsInstance<Inet4Address>().firstOrNull()
+                    address?.let {
+                        Networks.localOrigin("http://${it.hostAddress}:${service.port}")?.let(hosts::add)
                     }
                     resolving = null; resolveNext(); settleIfReady()
                 }
@@ -95,6 +101,16 @@ class LanDiscovery(context: Context, private val network: Network, private val t
             lastError = "StarPilot was advertised, but Android could not resolve its LAN address."
             resolving = null; resolveNext(); settleIfReady()
         }
+    }
+
+    private fun onLocalSubnet(address: Inet4Address): Boolean = localSubnets.any { link ->
+        val local = link.address.address
+        val remote = address.address
+        val fullBytes = link.prefixLength / 8
+        val remainingBits = link.prefixLength % 8
+        (0 until fullBytes).all { local[it] == remote[it] } &&
+            (remainingBits == 0 || (local[fullBytes].toInt() xor remote[fullBytes].toInt()) and
+                (0xff shl (8 - remainingBits)) == 0)
     }
 
     /** Allow a brief window for another advertised comma, without imposing the full discovery timeout. */
