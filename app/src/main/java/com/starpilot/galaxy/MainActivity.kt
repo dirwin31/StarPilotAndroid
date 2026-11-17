@@ -877,7 +877,16 @@ class MainActivity : Activity() {
             if (lan == null && automaticWifiAllowed() && RoutePlanner.better(Route.HOME_NETWORK, current, order)) Networks.wifi(this, false)?.let { wifi ->
                 val search = LanDiscovery(this, wifi.first, 3000L) { hosts, _ ->
                     upgradeDiscovery = null
-                    if (generation == connectionGeneration.get() && prefs.getString("transport", "auto") == "auto" && hosts.isNotEmpty() && automaticWifiAllowed() && Networks.wifi(this, false)?.first == wifi.first) connect(hosts.first())
+                    if (hosts.isEmpty() || generation != connectionGeneration.get()) return@LanDiscovery
+                    // Discovery also reports addresses that may not be reachable from here (another interface or
+                    // VLAN). Connecting drops the current link first, so only switch to one that answers.
+                    val cookies = hosts.associateWith { CookieManager.getInstance().getCookie(it) }
+                    Thread {
+                        val reachable = hosts.firstOrNull { host -> runCatching { GalaxyProbe.reachable(wifi.first, host, cookies[host]) {} }.getOrDefault(false) }
+                        runOnUiThread {
+                            if (reachable != null && generation == connectionGeneration.get() && prefs.getString("transport", "auto") == "auto" && automaticWifiAllowed() && Networks.wifi(this, false)?.first == wifi.first) connect(reachable)
+                        }
+                    }.start()
                 }
                 upgradeDiscovery = search; search.start()
             }
