@@ -79,6 +79,9 @@ class MainActivity : Activity() {
     private val tunnel by lazy { TunnelStore(this) }
     private var activeRoute: Route? = null
     private var demoSession: DemoSession? = null
+    private var offlineSession: OfflineSession? = null
+    /** True while a self-contained screen (demo or offline settings) is showing and no comma should be contacted. */
+    private val standalone get() = demoSession != null || offlineSession != null
     private var routeHash = "/"
     private val routeDetails = mutableMapOf<Route, String>()
     private fun pageHash(): String {
@@ -136,7 +139,7 @@ class MainActivity : Activity() {
      */
     private fun checkRouteHealth(force: Boolean = false) {
         val route = activeRoute
-        if (demoSession != null || healthRunning || route == null || prefs.getString("transport", "auto") != "auto" || pairProgress != null) { if (route == null) routeMisses = 0; return }
+        if (standalone || healthRunning || route == null || prefs.getString("transport", "auto") != "auto" || pairProgress != null) { if (route == null) routeMisses = 0; return }
         val generation = connectionGeneration.get()
         val wifi = (Networks.wifi(this) ?: Networks.wifi(this, false))?.first
         val credential = tunnel.load()
@@ -167,7 +170,7 @@ class MainActivity : Activity() {
     }
     private val defaultWatcher = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) handler.post { if (demoSession == null && idle() && tunnel.load() != null) connect() else scheduleUpgrade() }
+            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) handler.post { if (!standalone && idle() && tunnel.load() != null) connect() else scheduleUpgrade() }
         }
     }
     private var origin = Networks.ORIGIN
@@ -236,7 +239,7 @@ class MainActivity : Activity() {
     }
     private fun routeOrder() = RoutePlanner.parse(prefs.getString("routeOrder", null))
     private fun connect(host: String? = null, skipOrder: Boolean = false) {
-        if (demoSession != null) return
+        if (standalone) return
         DiagnosticLog.record("Connection attempt started")
         val generation = supersedeConnection()
         val mode = prefs.getString("transport", "auto")
@@ -285,6 +288,7 @@ class MainActivity : Activity() {
         view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
         view.addJavascriptInterface(Bridge(), "StarPilotApp")
+        view.addJavascriptInterface(QueueBridge(view, false), "StarPilotQueue")
         configureFiles(view)
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
@@ -313,6 +317,7 @@ class MainActivity : Activity() {
                     connectedSentry()
                     importLocalKey()
                     autoPairIfNeeded()
+                    syncOfflineChanges(v)
                 }
             }
         }
@@ -428,7 +433,8 @@ class MainActivity : Activity() {
             if (parent == null || parent.id != android.R.id.content) { parent?.removeView(existing.view); setContentView(existing.view) }
             return existing
         }
-        val created = ConnectScreen(this, ::tryRoute, { connect() }, { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, ::openTypedAddress, ::connections, ::showDemo, ::scanRemoteKey)
+        val created = ConnectScreen(this, ::tryRoute, { connect() }, { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, ::openTypedAddress, ::connections, ::showDemo, ::scanRemoteKey,
+            OfflineChanges.of(this).target()?.let { if (it.pending == 0) "Change settings offline" else "Change settings offline · ${it.pending} waiting" }, ::showOffline)
         screen = created
         refreshRoutes(created)
         setContentView(created.view)
@@ -483,6 +489,8 @@ class MainActivity : Activity() {
         connect(host); return null
     }
     private fun showWeb(view: WebView, route: Route, label: String, waitForPage: Boolean) {
+        // A live connection always wins over the offline screen, and then applies what was queued there.
+        offlineSession?.close(); offlineSession = null
         activeRoute = route
         DiagnosticLog.activeConnection = route.name
         DiagnosticLog.connectionStatus = if (waitForPage) "${route.name}: connected; loading Galaxy" else "${route.name}: connected"
@@ -579,6 +587,44 @@ class MainActivity : Activity() {
         SentryPollJob.cancel(this)
         demoSession = DemoSession(this) { demoSession?.close(); demoSession = null; SentryPush.suspended = false; intent.removeExtra("demo"); disconnected() }
         demoSession!!.show(intent.getStringExtra("openRoute") ?: "/")
+    }
+    /** Settings from the last connection, editable without a comma; changes wait in [OfflineChanges]. */
+    private fun showOffline() {
+        if (standalone || OfflineChanges.of(this).target() == null) return
+        supersedeConnection()
+        offlineSession = OfflineSession(this, OfflineChanges.of(this), ::closeOffline).also { it.show() }
+    }
+    private fun closeOffline() {
+        offlineSession?.close(); offlineSession = null
+        screen = null
+        disconnected(); connect()
+    }
+    /** Apply changes made offline and save fresh settings pages, through the page so every route works. */
+    private fun syncOfflineChanges(view: WebView) {
+        if (web !== view) return
+        runCatching { assets.open("offline-changes.js").bufferedReader().use { it.readText() } }.getOrNull()?.let { view.evaluateJavascript(it, null) }
+    }
+    // WebView calls this class through the StarPilotQueue JavaScript interface.
+    @Suppress("unused")
+    inner class QueueBridge(private val view: WebView, private val slow: Boolean) {
+        private val changes = OfflineChanges.of(this@MainActivity)
+        private var toldWaiting = false
+        @JavascriptInterface fun begin(device: String, name: String): String = changes.begin(device, name, slow)
+        @JavascriptInterface fun result(device: String, id: String, state: String, message: String) = changes.result(device, id, state, message)
+        @JavascriptInterface fun snapshot(device: String, page: String, text: String) = changes.snapshot(device, page, text)
+        @JavascriptInterface fun saved(device: String, path: String, text: String) = changes.saved(device, path, text)
+        @JavascriptInterface fun finish(device: String, complete: Boolean) {
+            val summary = changes.finish(device, complete)
+            runOnUiThread {
+                if (web !== view || isFinishing || isDestroyed) return@runOnUiThread
+                DiagnosticLog.record("Offline changes: ${summary.applied} applied, ${summary.failed.size} refused, ${summary.waiting} waiting")
+                if (summary.failed.isNotEmpty()) message((if (summary.applied > 0) "${summary.applied} offline change${if (summary.applied == 1) " was" else "s were"} applied.\n\n" else "") +
+                    "StarPilot did not accept:\n" + summary.failed.joinToString("\n") { "• $it" })
+                else if (summary.applied > 0) Toast.makeText(this@MainActivity, "${summary.applied} offline change${if (summary.applied == 1) "" else "s"} applied to StarPilot.", Toast.LENGTH_LONG).show()
+                else if (summary.waiting > 0 && !toldWaiting) Toast.makeText(this@MainActivity, "${summary.waiting} offline change${if (summary.waiting == 1) "" else "s"} will apply once StarPilot is parked.", Toast.LENGTH_LONG).show()
+                if (summary.waiting > 0) toldWaiting = true
+            }
+        }
     }
     private fun connections() {
         demoSession?.let { it.options(); return }
@@ -865,7 +911,7 @@ class MainActivity : Activity() {
         return true
     }
     private fun scheduleUpgrade() {
-        if (demoSession != null || pairProgress != null || upgradeDiscovery != null || upgradePending || prefs.getString("transport", "auto") != "auto" || activeRoute !in setOf(Route.TUNNEL, Route.BLUETOOTH)) return
+        if (standalone || pairProgress != null || upgradeDiscovery != null || upgradePending || prefs.getString("transport", "auto") != "auto" || activeRoute !in setOf(Route.TUNNEL, Route.BLUETOOTH)) return
         upgradePending = true
         handler.postDelayed({
             upgradePending = false
@@ -975,7 +1021,7 @@ class MainActivity : Activity() {
     private var scanningRemoteKey = false
 
     private fun importLocalKey() {
-        if (demoSession != null || activeRoute !in setOf(Route.GALAXY_WIFI, Route.HOME_NETWORK) ||
+        if (standalone || activeRoute !in setOf(Route.GALAXY_WIFI, Route.HOME_NETWORK) ||
             !prefs.getBoolean("autoImportRemoteKey", true)) return
         val view = web ?: return
         val local = Networks.localOrigin(origin) ?: return
@@ -1098,6 +1144,7 @@ class MainActivity : Activity() {
         view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
         view.addJavascriptInterface(RemoteBridge(), "StarPilotApp")
+        view.addJavascriptInterface(QueueBridge(view, false), "StarPilotQueue")
         configureFiles(view)
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
@@ -1107,7 +1154,7 @@ class MainActivity : Activity() {
             }
             override fun shouldInterceptRequest(v: WebView, request: WebResourceRequest): WebResourceResponse? =
                 if (Networks.tunnelOrigin(request.url.toString(), credential.slug)) null else WebResourceResponse("text/plain", "UTF-8", 403, "Denied", emptyMap(), ByteArrayInputStream(byteArrayOf()))
-            override fun onPageFinished(v: WebView, url: String) { if (web === v && Networks.tunnelOrigin(url, credential.slug)) { installVibrationBridge(v); revealWeb(); connectedSentry() } }
+            override fun onPageFinished(v: WebView, url: String) { if (web === v && Networks.tunnelOrigin(url, credential.slug)) { installVibrationBridge(v); revealWeb(); connectedSentry(); syncOfflineChanges(v) } }
             override fun onReceivedHttpError(v: WebView, request: WebResourceRequest, response: WebResourceResponse) {
                 if (request.isForMainFrame && response.statusCode in setOf(401, 403)) runOnUiThread {
                     if (web === v) {
@@ -1723,6 +1770,7 @@ class MainActivity : Activity() {
         view.settings.allowFileAccess = false; view.settings.allowContentAccess = false
         view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         view.addJavascriptInterface(RemoteBridge(), "StarPilotApp")
+        view.addJavascriptInterface(QueueBridge(view, true), "StarPilotQueue")
         view.addJavascriptInterface(object {
             @JavascriptInterface fun cancel(id: String) { jobs.remove(id)?.cancel(false); worker.purge() }
             @JavascriptInterface fun request(id: String, raw: String) {
@@ -1777,6 +1825,7 @@ class MainActivity : Activity() {
                 share = null
                 installVibrationBridge(v)
                 connectedSentry(transport)
+                syncOfflineChanges(v)
                 val revision = remotePairingRevision
                 if (tunnel.load() == null && prefs.getBoolean("autoImportRemoteKey", true)) try { worker.execute { runCatching {
                     val reply = transport.request(JSONObject().put("method", "GET").put("path", "/api/galaxy/session").put("headers", JSONObject()).put("body", ""))
@@ -1837,6 +1886,7 @@ class MainActivity : Activity() {
         @JavascriptInterface fun openWifiSettings() { runOnUiThread { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) } }
     }
     private fun navigateBack() {
+        offlineSession?.let { if (it.web.canGoBack()) it.web.goBack() else closeOffline(); return }
         if (demoSession != null) { if (demoSession!!.web.canGoBack()) demoSession!!.web.goBack() else { demoSession?.close(); demoSession = null; SentryPush.suspended = false; intent.removeExtra("demo"); disconnected() }; return }
         if (web?.canGoBack() == true) web?.goBack() else {
             if (Build.VERSION.SDK_INT >= 33) backCallback?.let { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it) }
@@ -1846,7 +1896,7 @@ class MainActivity : Activity() {
     @android.annotation.SuppressLint("GestureBackNavigation")
     @Deprecated("Legacy back handling for API 26–32") override fun onBackPressed() = navigateBack()
     override fun onResume() {
-        super.onResume(); resumed = true; if (demoSession != null) return; PendingShare.deliver(this); recovery.resumed(); GalaxyUpdates.checkAsync(this) {}; Distribution.checkAsync(this); checkMusicBond()
+        super.onResume(); resumed = true; if (standalone) return; PendingShare.deliver(this); recovery.resumed(); GalaxyUpdates.checkAsync(this) {}; Distribution.checkAsync(this); checkMusicBond()
         Distribution.resume(this)
     }
     override fun onPause() { resumed = false; super.onPause() }
@@ -1858,6 +1908,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         remotePairingFlow?.cancel(); remotePairingFlow = null
         demoSession?.close(); demoSession = null; SentryPush.suspended = false
+        offlineSession?.close(); offlineSession = null
         SentryPush.api = null
         pairCancelled = true; pairTransport?.close(); hidePairProgress()
         stopDiscovery(); clearWatchdog(); handler.removeCallbacksAndMessages(null)
