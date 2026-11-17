@@ -17,8 +17,8 @@ android {
         applicationId = "link.firestar.companion"
         minSdk = 26
         targetSdk = 36
-        versionCode = 47
-        versionName = "7.0.0.11"
+        versionCode = 48
+        versionName = "7.0.0.12"
     }
     signingConfigs {
         create("upload") {
