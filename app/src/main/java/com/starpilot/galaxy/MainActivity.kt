@@ -367,13 +367,65 @@ class MainActivity : Activity() {
         view.webChromeClient = filePicker
         // target="_blank" follows the same navigation policy as ordinary links.
         view.settings.setSupportMultipleWindows(false)
-        view.setDownloadListener { url, _, _, _, _ ->
+        view.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             if (web === view) {
                 val local = Networks.localOrigin(url) == origin
+                val remote = tunnel.load()?.let { origin == it.webUrl.trimEnd('/') && Networks.tunnelOrigin(url, it.slug) } == true
                 if (local && Uri.parse(url).path in setOf("/app.apk", "/api/companion/app.apk")) requestAppUpdate()
-                else if (local || GalaxyLinks.external(url)) openBrowser(Uri.parse(url))
+                else if (local || remote) saveGalaxyDownload(url, userAgent, contentDisposition, mimeType)
+                else if (GalaxyLinks.external(url)) openBrowser(Uri.parse(url))
+                else message("This download link isn't supported. Open Galaxy over Wi-Fi or LAN and try again.")
             }
         }
+    }
+    private data class GalaxyDownload(val url: String, val name: String, val type: String, val userAgent: String?, val cookie: String?)
+    private val galaxyDownloadRequest = 3003
+    private var pendingGalaxyDownload: GalaxyDownload? = null
+    private fun saveGalaxyDownload(url: String, userAgent: String?, disposition: String?, mimeType: String?) {
+        if (pendingGalaxyDownload != null) { message("Choose where to save the current file first."); return }
+        val name = URLUtil.guessFileName(url, disposition, mimeType).substringAfterLast('/').substringAfterLast('\\')
+            .take(120).ifBlank { "galaxy-download" }
+        pendingGalaxyDownload = GalaxyDownload(url, name, mimeType?.takeIf { it.isNotBlank() } ?: "application/octet-stream",
+            userAgent, CookieManager.getInstance().getCookie(url))
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = pendingGalaxyDownload!!.type
+                putExtra(Intent.EXTRA_TITLE, name)
+            }, galaxyDownloadRequest)
+        } catch (_: ActivityNotFoundException) {
+            pendingGalaxyDownload = null
+            message("No file manager is available to save this download.")
+        }
+    }
+    private fun finishGalaxyDownload(destination: Uri) {
+        val download = pendingGalaxyDownload ?: return
+        pendingGalaxyDownload = null
+        Thread {
+            var connection: HttpURLConnection? = null
+            val result = runCatching {
+                val network = if (Networks.localOrigin(download.url) != null) Networks.commaLan(this)?.first
+                    else Networks.internet(this)
+                requireNotNull(network) { "The Galaxy network is unavailable. Reconnect and try again." }
+                val http = network.openConnection(java.net.URL(download.url)) as HttpURLConnection
+                connection = http
+                http.instanceFollowRedirects = false
+                http.connectTimeout = 15000
+                http.readTimeout = 30000
+                download.userAgent?.let { http.setRequestProperty("User-Agent", it) }
+                download.cookie?.let { http.setRequestProperty("Cookie", it) }
+                if (http.responseCode !in 200..299) error("Galaxy returned HTTP ${http.responseCode}. Reconnect and try again.")
+                contentResolver.openOutputStream(destination, "w")?.use { output -> http.inputStream.use { it.copyTo(output) } }
+                    ?: error("The selected location could not be written.")
+            }
+            connection?.disconnect()
+            if (result.isFailure) runCatching { contentResolver.delete(destination, null, null) }
+            runOnUiThread {
+                if (result.isSuccess) message("Saved ${download.name} to the location you chose.")
+                else message("Couldn't save ${download.name}: ${result.exceptionOrNull()?.message ?: "Download failed"}")
+            }
+        }.start()
     }
     private fun openExternalLink(view: WebView, request: WebResourceRequest) {
         if (web === view && request.isForMainFrame && request.hasGesture() && request.method == "GET" && GalaxyLinks.external(request.url.toString())) {
@@ -391,6 +443,19 @@ class MainActivity : Activity() {
     }
     @Deprecated("Activity result API for the platform file picker")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == galaxyDownloadRequest) {
+            val destination = data?.data
+            if (resultCode == RESULT_OK && destination != null) finishGalaxyDownload(destination)
+            else pendingGalaxyDownload = null
+            return
+        }
+        if (requestCode == bluetoothEnableRequest) {
+            val action = pendingBluetoothAction
+            pendingBluetoothAction = null
+            if (getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled == true) action?.invoke()
+            else bluetoothEnableDenied()
+            return
+        }
         if (requestCode == QR_SCAN) {
             scanningRemoteKey = false
             if (resultCode == RESULT_OK && data != null) {
@@ -753,8 +818,9 @@ class MainActivity : Activity() {
         if (missing.isEmpty()) return
         if (missing.any { !shouldShowRequestPermissionRationale(it) }) permissionSettings(name)
         else AlertDialog.Builder(this).setTitle("$name wasn't allowed")
-            .setMessage("This feature needs $name. You can try again from Permissions in Connections.")
-            .setPositiveButton("OK", null).show()
+            .setMessage("This feature needs $name. Allow it in Connections > Permissions, then try again.")
+            .setPositiveButton("Open App settings") { _, _ -> appSettings() }
+            .setNegativeButton("Later", null).show()
     }
     private fun requestAppUpdate(requestedOrigin: String = origin) = Distribution.requestUpdate(this, requestedOrigin)
     private var discovery: LanDiscovery? = null
@@ -1280,12 +1346,46 @@ class MainActivity : Activity() {
             .setPositiveButton("Continue") { _, _ -> pairPhone(confirmed = true) }
             .setNegativeButton("Cancel", null).show()
     }
+    private var pairAfterPermissionConfirmed = false
+    private var pendingBluetoothAction: (() -> Unit)? = null
+    private val bluetoothEnableRequest = 3002
+    private fun requireBluetooth(action: () -> Unit): Boolean {
+        val adapter = getSystemService(BluetoothManager::class.java)?.adapter
+        if (adapter == null) {
+            message("This phone doesn't support Bluetooth. You can use Galaxy over Wi-Fi or LAN.")
+            return false
+        }
+        if (runCatching { adapter.isEnabled }.getOrDefault(false)) return true
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            requestFeaturePermissions(bluetoothPermissions(), 21, "Nearby devices")
+            return false
+        }
+        pendingBluetoothAction = action
+        try {
+            @Suppress("DEPRECATION", "MissingPermission")
+            startActivityForResult(Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_ENABLE), bluetoothEnableRequest)
+        } catch (_: Exception) {
+            pendingBluetoothAction = null
+            bluetoothEnableDenied()
+        }
+        return false
+    }
+    private fun bluetoothEnableDenied() {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle("Bluetooth is off")
+            .setMessage("Turn on Bluetooth to pair with StarPilot. Galaxy over Wi-Fi or LAN still works.")
+            .setPositiveButton("Bluetooth settings") { _, _ -> startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+            .setNegativeButton("Later", null).show()
+    }
     private fun pairPhone(confirmed: Boolean = false) {
         DiagnosticLog.record("Bluetooth app pairing requested; manualWindowConfirmed=$confirmed")
         if (pairProgress != null || autoPairing.get()) return
-        val permissions = if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-            else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) { requestFeaturePermissions(permissions, 5, "Nearby devices"); return }
+        val permissions = bluetoothPermissions()
+        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
+            pairAfterPermissionConfirmed = confirmed
+            requestFeaturePermissions(permissions, 5, "Nearby devices"); return
+        }
+        if (!requireBluetooth { pairPhone(confirmed) }) return
         if (!confirmed && Networks.commaLan(this) == null) { askToOpenWindow(); return }
         if (!autoPairing.compareAndSet(false, true)) return
         val generation = supersedeConnection()
@@ -1456,7 +1556,10 @@ class MainActivity : Activity() {
     }
     private fun startAutoPair() {
         val permissions = bluetoothPermissions()
-        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) requestFeaturePermissions(permissions, 6, "Nearby devices") else runAutoPair()
+        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
+            requestFeaturePermissions(permissions, 6, "Nearby devices"); return
+        }
+        if (requireBluetooth(::startAutoPair)) runAutoPair()
     }
     private fun runAutoPair() {
         DiagnosticLog.record("Bluetooth automatic app pairing started")
@@ -1521,7 +1624,10 @@ class MainActivity : Activity() {
     /** Retries only the music bond; the app key from the earlier pairing stays untouched. */
     private fun startMusicOnly() {
         val permissions = bluetoothPermissions()
-        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) requestFeaturePermissions(permissions, 7, "Nearby devices") else runMusicOnly()
+        if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
+            requestFeaturePermissions(permissions, 7, "Nearby devices"); return
+        }
+        if (requireBluetooth(::startMusicOnly)) runMusicOnly()
     }
     private fun runMusicOnly() {
         DiagnosticLog.musicStatus = "Music setup requested"
@@ -1720,15 +1826,17 @@ class MainActivity : Activity() {
         }
         if (code == 1 && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) Distribution.checkAsync(this)
         if (code == 5) {
-            if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) pairPhone()
+            val confirmed = pairAfterPermissionConfirmed
+            pairAfterPermissionConfirmed = false
+            if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) pairPhone(confirmed)
             else permissionDenied(permissions, "Nearby devices")
         }
         if (code == 6) {
-            if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) runAutoPair()
+            if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) startAutoPair()
             else permissionDenied(permissions, "Nearby devices")
         }
         if (code == 7) {
-            if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) runMusicOnly()
+            if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) startMusicOnly()
             else permissionDenied(permissions, "Nearby devices")
         }
         if (code == 4) {
