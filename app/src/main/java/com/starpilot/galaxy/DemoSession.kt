@@ -95,7 +95,7 @@ class DemoSession(private val activity: MainActivity, private val exit: () -> Un
     }
     private fun enableUplink(on: Boolean) {
         if (!on) { uplink = false; manager.cancel(Notifications.DEMO_UPLINK); return }
-        disclosure("uplink", "Shares this phone's mobile data with your StarPilot device over its Wi-Fi hotspot. Only your StarPilot can connect, and a notification with Stop shows while it's active. Your carrier may count this as hotspot usage.") {
+        disclosure("uplink", "Shares this phone's mobile data with your StarPilot device over its Wi-Fi hotspot. Only your StarPilot can connect, and a notification with Stop shows while it's active. Uses your mobile data plan; some carrier plans don't allow sharing data with other devices.") {
             uplink = true; notification(Notifications.DEMO_UPLINK, "Sharing mobile data with StarPilot (demo)")
         }
     }

@@ -747,6 +747,15 @@ class MainActivity : Activity() {
                         .setPositiveButton("Done", null).show()
                 }
             }
+            .group("Phone internet") {
+                if (prefs.getBoolean("enabled", false)) {
+                    action("Stop sharing phone internet", "Sharing this phone's mobile data over Galaxy Wi-Fi") { setPhoneInternet(false) }
+                    val resume = prefs.getBoolean("autoStart", false)
+                    action("Resume after phone restart: " + if (resume) "On" else "Off", "Keeps a notification while waiting for Galaxy Wi-Fi") {
+                        prefs.edit().putBoolean("autoStart", !resume).apply()
+                    }
+                } else action("Share phone internet with StarPilot", "StarPilot uses this phone's mobile data while the phone is on its Galaxy Wi-Fi hotspot") { setPhoneInternet(true) }
+            }
             .group("Phone GPS") {
                 if (PhoneGpsService.enabled(prefs)) action("Stop sharing phone GPS") { setPhoneGps(false) }
                 else action("Share phone GPS with StarPilot", "StarPilot uses it for navigation when its own GPS has no fix") { setPhoneGps(true) }
@@ -1335,6 +1344,7 @@ class MainActivity : Activity() {
             ?: "${Build.MANUFACTURER} ${Build.MODEL}").take(40)
     private fun phoneHello(): JSONObject = JSONObject().put("name", phoneName()).apply { pairing.previousId()?.let { put("replaces", it) } }
     /** One step for the app and music: comma's open pairing window gives this phone its key, then bonds it for music. */
+    private val UPLINK_DISCLOSURE = "Shares this phone's mobile data with your StarPilot device over its Wi-Fi hotspot. Only your StarPilot can connect, and a notification with Stop shows while it's active. Uses your mobile data plan; some carrier plans don't allow sharing data with other devices."
     private val ALSO_FORGET_ON_COMMA = "Also forget this phone on StarPilot (Settings > Bluetooth, or Galaxy > Bluetooth), or StarPilot keeps the old pairing and may fail to pair this phone again."
     private val ALSO_FORGET_ON_PHONE = "Also forget StarPilot in this phone's Bluetooth settings before pairing again, so the old Bluetooth bond doesn't get in the way."
     private val PAIR_STEPS = "On StarPilot open Settings > Bluetooth > Pair phone (or Galaxy > Bluetooth > Pair phone) and keep that screen open."
@@ -1705,6 +1715,21 @@ class MainActivity : Activity() {
     }
     /** Pairing results appear on the connect screen when it is showing, otherwise in a dialog over Galaxy. */
     private fun phoneGpsPermissions(): Array<String> = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+    private fun setPhoneInternet(enabled: Boolean) {
+        if (enabled && !prefs.getBoolean("uplinkDisclosureAccepted", false)) {
+            AlertDialog.Builder(this).setTitle("Phone internet").setMessage(UPLINK_DISCLOSURE)
+                .setPositiveButton("Continue") { _, _ -> prefs.edit().putBoolean("uplinkDisclosureAccepted", true).apply(); setPhoneInternet(true) }
+                .setNegativeButton("Cancel", null).show()
+            return
+        }
+        applyPhoneInternet(enabled)
+        if (enabled) message("Sharing phone internet. Join StarPilot's Galaxy Wi-Fi; StarPilot accepts it automatically and a notification with Stop shows while it's active.")
+    }
+    private fun applyPhoneInternet(enabled: Boolean) {
+        prefs.edit().putBoolean("enabled", enabled).apply()
+        if (enabled) startForegroundService(Intent(this, UplinkService::class.java))
+        else stopService(Intent(this, UplinkService::class.java))
+    }
     private fun setPhoneGps(enabled: Boolean) {
         if (enabled && !prefs.getBoolean("gpsDisclosureAccepted", false)) {
             AlertDialog.Builder(this).setTitle("Phone GPS").setMessage("Galaxy sends this phone's location to your StarPilot device to improve navigation while driving. Location is only used while the Phone GPS notification is showing.")
@@ -1976,18 +2001,14 @@ class MainActivity : Activity() {
                 var dialog: AlertDialog? = null
                 runOnUiThread {
                     if (isFinishing || isDestroyed) { answer.countDown(); return@runOnUiThread }
-                    dialog = AlertDialog.Builder(this@MainActivity).setTitle("Phone internet").setMessage("Shares this phone's mobile data with your StarPilot device over its Wi-Fi hotspot. Only your StarPilot can connect, and a notification with Stop shows while it's active. Your carrier may count this as hotspot usage.")
+                    dialog = AlertDialog.Builder(this@MainActivity).setTitle("Phone internet").setMessage(UPLINK_DISCLOSURE)
                         .setPositiveButton("Continue") { _, _ -> prefs.edit().putBoolean("uplinkDisclosureAccepted", true).apply(); accepted.set(true) }
                         .setNegativeButton("Cancel", null).setOnDismissListener { answer.countDown() }.show()
                 }
                 if (!answer.await(60, TimeUnit.SECONDS)) { runOnUiThread { dialog?.dismiss() }; return false }
                 if (!accepted.get()) return false
             }
-            runOnUiThread {
-                prefs.edit().putBoolean("enabled", enabled).apply()
-                if (enabled) startForegroundService(Intent(this@MainActivity, UplinkService::class.java))
-                else stopService(Intent(this@MainActivity, UplinkService::class.java))
-            }
+            runOnUiThread { applyPhoneInternet(enabled) }
             return true
         }
         @JavascriptInterface fun setAutoStart(enabled: Boolean) { prefs.edit().putBoolean("autoStart", enabled).apply() }
